@@ -1,0 +1,5 @@
+# Końce linii zawsze LF - także przy edycji na Windowsie.
+# Skrypt z końcami CRLF nie uruchomi się na Pi ("bad interpreter").
+* text=auto eol=lf
+
+*.png binary

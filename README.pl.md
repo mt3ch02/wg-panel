@@ -68,7 +68,7 @@ Potem otwórz panel, załóż konto i **sprawdź ustawienia sieci** (podsieć LA
 | czysty system | **B** — nowy klucz serwera, nowy VPN |
 | czysty system oraz kopię panelu i klucz serwera | **C** — odtworzenie; nikt niczego nie zmienia |
 
-Opcje instalatora: `LAN_ACCESS=192.168.1.0/24` (panel dostępny z sieci domowej), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Aktualizacja: `git pull && sudo ./install.sh` — dane zostają. Odinstalowanie: `sudo /opt/wg-panel/uninstall.sh` (VPN działa dalej).
+Opcje instalatora: `LAN_ACCESS=192.168.1.0/24` (panel dostępny z sieci domowej), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Aktualizacja: `git pull && sudo ./install.sh` z **tymi samymi opcjami co przy instalacji** (instalator ich nie pamięta; bez `LAN_ACCESS` panel wraca do trybu „tylko przez VPN”) — dane zostają. Odinstalowanie: `sudo /opt/wg-panel/uninstall.sh` (VPN działa dalej).
 
 ## Jak to działa
 

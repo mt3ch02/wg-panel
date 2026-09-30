@@ -115,7 +115,7 @@ sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
 ```
 
-> Without Git: download the archive from GitHub (Code → Download ZIP, or the Releases page), copy it to the Pi with `scp` and unpack it to `~/wg-panel`.
+> Without Git: download the archive from GitHub (Code → Download ZIP, or the Releases page) and copy it to the Pi with `scp`. **Unpack it on the Pi, not on Windows** — Windows drops the executable bit and `./install.sh` stops running. On the Pi: `unzip wg-panel-*.zip && mv wg-panel-*/ ~/wg-panel` (run `sudo apt install -y unzip` first if needed). The folder inside the archive is named e.g. `wg-panel-main`, hence the rename.
 
 ---
 
@@ -220,7 +220,7 @@ The panel starts with example values (the table at the top of this guide). **Rep
 | Listen port | the WireGuard port, e.g. `51820` |
 | NAS address | your NAS's address (goes into the host catalog as `nas`) |
 | DNS for full mode | e.g. `9.9.9.9` — Quad9: blocks malicious domains and doesn't profile queries |
-| **Endpoint for clients** | the public address and port at which your home is reachable, e.g. `83.11.9.240:51820` or `home.duckdns.org:51820` (on path A: the same as the `Endpoint` field in your existing client files) |
+| **Endpoint for clients** | the public address and port at which your home is reachable, e.g. `203.0.113.10:51820` or `yourname.duckdns.org:51820` (on path A: the same as the `Endpoint` field in your existing client files) |
 
 > ⚠ **The LAN subnet must match your real network.** The NAS tier ends with a "block the LAN" rule, and `LAN` is exactly the subnet from Settings. With a wrong value, a person in the NAS tier will **not** be blocked on your real network. After saving the settings, verify it with the simulator (Step 13).
 
@@ -473,7 +473,7 @@ You should see: `deny (incoming)`, a rule for port 22 from your LAN and a rule f
 **Where: your router's admin panel**
 
 1. Port forwarding: **UDP 51820 → 192.168.1.10:51820**.
-2. Write down the public address at which your home is reachable: a fixed IP from your ISP or a DDNS name (e.g. `home.duckdns.org`). This will be the **Endpoint** in Step B9.
+2. Write down the public address at which your home is reachable: a fixed IP from your ISP or a DDNS name (e.g. `yourname.duckdns.org`). This will be the **Endpoint** in Step B9.
 
 > If your ISP changes your public IP, set up DDNS — otherwise the VPN breaks for everyone at once when the address changes.
 
@@ -504,7 +504,7 @@ Do **Step 7** and **Step 8** from path A.
 
 **Where: Browser → Settings**
 
-As in **Step 9** from path A. The most important field is **Endpoint for clients** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820`. Also check **Pi's address on the home network** and the **LAN subnet**.
+As in **Step 9** from path A. The most important field is **Endpoint for clients** — the address from Step B5 with the port, e.g. `yourname.duckdns.org:51820`. Also check **Pi's address on the home network** and the **LAN subnet**.
 
 ## Step B10 — Add people
 
@@ -646,9 +646,9 @@ As in **Step B13**. People connect with their old files — nobody changes anyth
 **Where: Phone, then Browser → Alerts**
 
 1. Install the **ntfy** app on your phone (no account needed).
-2. Make up a long random topic name, e.g. `wg-home-k7f2q9x4m1` — at least 12 characters, with digits.
+2. Generate a random topic name. On the Pi: `echo wg-home-$(openssl rand -hex 8)` — you get `wg-home-` plus 16 random characters. Write it down. **Don't copy an example from any guide:** an ntfy topic works like a password — anyone who knows its name can read your alerts (people's names, addresses).
 3. In the app: **+** → enter that name → **Subscribe**.
-4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/wg-home-k7f2q9x4m1`, **Save**.
+4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/` + your topic name (e.g. `https://ntfy.sh/wg-home-YOUR-RANDOM-CHARS`), **Save**.
 5. Click **Send test alert**.
 
 You should see on your phone: "wg-panel: test powiadomień" (the notification text is currently in Polish).
@@ -1205,7 +1205,18 @@ git pull
 sudo ./install.sh
 ```
 
-The installer is safe to run again: it replaces the program and the services, and **your data (database, keys, backups) stays**. It pauses the watchdog during the update. If you installed with options (`LAN_ACCESS`, `BIND_HOST`, `INSTALL_LANG`), pass them again.
+The installer is safe to run again: it replaces the program and the services, and **your data (database, keys, backups) stays**. It pauses the watchdog during the update.
+
+> **Pass the same options you installed with.** The installer doesn't remember earlier options (`LAN_ACCESS`, `BIND_HOST`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) — run without them, it goes back to the defaults. If you installed with home-network access and update without `LAN_ACCESS`, the panel becomes reachable only over the VPN. Example: `sudo LAN_ACCESS=192.168.1.0/24 ./install.sh`.
+>
+> Don't remember what you installed with? Check:
+>
+> ```bash
+> systemctl cat wg-panel | grep WGPANEL_
+> sudo ufw status | grep wg-panel
+> ```
+>
+> `WGPANEL_HOST=0.0.0.0` means `LAN_ACCESS` was used — the subnet is in the ufw rule "wg-panel LAN". `WGPANEL_PORT` other than `8080` is `BIND_PORT`, and `WGPANEL_TLS=0` is `TLS=0`.
 
 The `~/wg-panel` directory (the cloned repository) isn't needed for the panel to run — the installer copied everything from it into `/opt/wg-panel`. You can delete it and clone again for the next update.
 

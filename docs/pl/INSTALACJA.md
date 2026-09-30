@@ -115,7 +115,7 @@ sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
 ```
 
-> Bez Gita: pobierz archiwum z GitHuba (Code → Download ZIP albo strona Releases), skopiuj je na Pi przez `scp` i rozpakuj do `~/wg-panel`.
+> Bez Gita: pobierz archiwum z GitHuba (Code → Download ZIP albo strona Releases) i skopiuj je na Pi przez `scp`. **Rozpakuj je na Pi, nie na Windowsie** — Windows gubi prawo wykonywania plików i `./install.sh` przestaje się uruchamiać. Na Pi: `unzip wg-panel-*.zip && mv wg-panel-*/ ~/wg-panel` (w razie potrzeby najpierw `sudo apt install -y unzip`). Folder z archiwum nazywa się np. `wg-panel-main`, stąd zmiana nazwy.
 
 ---
 
@@ -221,7 +221,7 @@ Panel startuje z wartościami przykładowymi (tabela na początku instrukcji). *
 | Port nasłuchu | port WireGuarda, np. `51820` |
 | Adres NAS | adres Twojego NAS-a (trafia do katalogu hostów jako `nas`) |
 | DNS dla trybu full | np. `9.9.9.9` — Quad9: blokuje złośliwe domeny i nie profiluje zapytań |
-| **Endpoint dla klientów** | publiczny adres i port, pod którym widać Twój dom, np. `83.11.9.240:51820` albo `home.duckdns.org:51820` (na ścieżce A: to samo, co w polu `Endpoint` w plikach klientów) |
+| **Endpoint dla klientów** | publiczny adres i port, pod którym widać Twój dom, np. `203.0.113.10:51820` albo `nazwa.duckdns.org:51820` (na ścieżce A: to samo, co w polu `Endpoint` w plikach klientów) |
 
 > ⚠ **Podsieć LAN musi się zgadzać z Twoją prawdziwą siecią.** Tier NAS kończy się regułą „zablokuj LAN”, a `LAN` to dokładnie ta podsieć z Ustawień. Przy błędnej wartości osoba z tierem NAS nie zostanie zablokowana w Twojej prawdziwej sieci. Po zapisie ustawień sprawdź to symulatorem (Krok 13).
 
@@ -476,7 +476,7 @@ Masz zobaczyć: `deny (incoming)`, reguła dla portu 22 z `192.168.1.0/24` i reg
 **Gdzie: panel administracyjny routera**
 
 1. Przekierowanie portu: **UDP 51820 → 192.168.1.10:51820**.
-2. Zapisz publiczny adres, pod którym widać Twój dom: stały IP od dostawcy albo nazwa DDNS (np. `home.duckdns.org`). To będzie **Endpoint** w Kroku B9.
+2. Zapisz publiczny adres, pod którym widać Twój dom: stały IP od dostawcy albo nazwa DDNS (np. `nazwa.duckdns.org`). To będzie **Endpoint** w Kroku B9.
 
 > Jeśli dostawca zmienia Ci publiczny IP, ustaw DDNS — inaczej po zmianie adresu VPN przestanie działać wszystkim naraz.
 
@@ -507,7 +507,7 @@ Wykonaj **Krok 7** i **Krok 8** ze ścieżki A.
 
 **Gdzie: Przeglądarka → Ustawienia**
 
-Tak jak **Krok 9** ze ścieżki A. Najważniejsze pole to **Endpoint dla klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820`. Sprawdź też **Adres Pi w sieci domowej**: `192.168.1.10`.
+Tak jak **Krok 9** ze ścieżki A. Najważniejsze pole to **Endpoint dla klientów** — adres z Kroku B5 z portem, np. `nazwa.duckdns.org:51820`. Sprawdź też **Adres Pi w sieci domowej**: `192.168.1.10`.
 
 ## Krok B10 — Dodaj osoby
 
@@ -652,9 +652,9 @@ Tak jak **Krok B13**. Osoby łączą się ze swoimi starymi plikami — nikt nic
 **Gdzie: Telefon, potem Przeglądarka → Alerty**
 
 1. Zainstaluj na telefonie aplikację **ntfy** (bez zakładania konta).
-2. Wymyśl długą, losową nazwę tematu, np. `wg-dom-k7f2q9x4m1` — co najmniej 12 znaków, z cyframi.
+2. Wygeneruj losową nazwę tematu. Na Pi: `echo wg-dom-$(openssl rand -hex 8)` — wyjdzie `wg-dom-` i 16 losowych znaków. Zapisz ją. **Nie przepisuj przykładu z żadnej instrukcji:** temat ntfy działa jak hasło — kto zna jego nazwę, ten czyta Twoje alerty (nazwy osób, adresy).
 3. W aplikacji: **+** → wpisz tę nazwę → **Subskrybuj**.
-4. W panelu, zakładka **Alerty** → Ustawienia powiadomień: kanał `ntfy`, adres `https://ntfy.sh/wg-dom-k7f2q9x4m1`, **Zapisz**.
+4. W panelu, zakładka **Alerty** → Ustawienia powiadomień: kanał `ntfy`, adres `https://ntfy.sh/` + Twoja nazwa tematu (np. `https://ntfy.sh/wg-dom-TWOJE-LOSOWE-ZNAKI`), **Zapisz**.
 5. Kliknij **Wyślij testowy alert**.
 
 Masz zobaczyć: na telefonie „wg-panel: test powiadomień" **z polskimi znakami** w treści. Stuknięcie w powiadomienie otwiera stronę alertów panelu (przez VPN).
@@ -1220,7 +1220,18 @@ git pull
 sudo INSTALL_LANG=pl ./install.sh
 ```
 
-Instalator jest bezpieczny do ponownego uruchomienia: podmienia program i usługi, a **dane (baza, klucze, kopie) zostają**. Na czas aktualizacji wstrzymuje strażnika. Jeśli instalowałeś z opcjami (`LAN_ACCESS`, `BIND_HOST`, `INSTALL_LANG`), podaj je ponownie.
+Instalator jest bezpieczny do ponownego uruchomienia: podmienia program i usługi, a **dane (baza, klucze, kopie) zostają**. Na czas aktualizacji wstrzymuje strażnika.
+
+> **Podaj te same opcje co przy instalacji.** Instalator nie pamięta poprzednich opcji (`LAN_ACCESS`, `BIND_HOST`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) — uruchomiony bez nich wraca do domyślnych. Jeśli instalowałeś z dostępem z sieci domowej, a zaktualizujesz bez `LAN_ACCESS`, panel będzie dostępny już tylko przez VPN. Przykład: `sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh`.
+>
+> Nie pamiętasz, z czym instalowałeś? Sprawdź:
+>
+> ```bash
+> systemctl cat wg-panel | grep WGPANEL_
+> sudo ufw status | grep wg-panel
+> ```
+>
+> `WGPANEL_HOST=0.0.0.0` oznacza, że był `LAN_ACCESS` — podsieć widać w regule ufw „wg-panel LAN”. `WGPANEL_PORT` inny niż `8080` to `BIND_PORT`, a `WGPANEL_TLS=0` to `TLS=0`.
 
 Katalog `~/wg-panel` (sklonowane repozytorium) nie jest potrzebny do działania panelu — instalator skopiował z niego wszystko do `/opt/wg-panel`. Możesz go usunąć i sklonować ponownie przy następnej aktualizacji.
 

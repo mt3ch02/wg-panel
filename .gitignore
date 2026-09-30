@@ -1,11 +1,30 @@
+# Python
 __pycache__/
 *.pyc
+.venv/
+
+# dane z prawdziwej instalacji / data from a real installation
 *.db
 *.db-wal
 *.db-shm
 *.key
 *.enc
-.venv/
+*.conf
+*.pem
+*.crt
+*.csr
+*.p12
+.env
+
+# archiwa i kopie / archives and backups
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.bak
+
+# edytory i system / editors and OS
 .idea/
 .vscode/
 .DS_Store
+desktop.ini

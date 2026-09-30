@@ -68,7 +68,7 @@ Then open the panel, create an account, and **check the network settings** (LAN 
 | a clean system | **B** — new server key, new VPN |
 | a clean system and a panel backup + your server key | **C** — restore; nobody changes anything |
 
-Installer options: `LAN_ACCESS=192.168.1.0/24` (open the panel to your home network), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Update with `git pull && sudo ./install.sh` — your data stays. Remove with `sudo /opt/wg-panel/uninstall.sh` (the VPN keeps running).
+Installer options: `LAN_ACCESS=192.168.1.0/24` (open the panel to your home network), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Update with `git pull && sudo ./install.sh`, passing **the same options you installed with** (the installer doesn't remember them; without `LAN_ACCESS` the panel goes back to VPN-only) — your data stays. Remove with `sudo /opt/wg-panel/uninstall.sh` (the VPN keeps running).
 
 ## How it works
 
