@@ -1,0 +1,45 @@
+[Unit]
+Description=wg-panel (interfejs webowy)
+After=network-online.target wg-panel-helper.service
+Wants=wg-panel-helper.service
+
+[Service]
+Type=simple
+User=wg-panel
+Group=wg-panel
+ExecStart=/usr/bin/python3 /opt/wg-panel/panel/app.py
+Restart=always
+RestartSec=3
+# pliki bazy (takze -wal i -shm) musza byc zapisywalne dla grupy wg-panel,
+# inaczej wgctl widzi baze jako tylko do odczytu
+UMask=0007
+Environment=WGPANEL_DB=/var/lib/wg-panel/panel.db
+Environment=WGPANEL_SOCKET=/run/wg-panel/helper.sock
+Environment=WGPANEL_HOST=10.0.0.1
+Environment=WGPANEL_PORT=8080
+# HTTPS z wlasnego urzedu certyfikacji (TLS=0 ./install.sh wylacza)
+Environment=WGPANEL_TLS=1
+Environment=WGPANEL_TLS_DIR=/var/lib/wg-panel/tls
+
+# proces webowy nie ma dostepu do niczego poza wlasna baza
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# AF_NETLINK: smbclient (kopie na NAS) odczytuje nim liste interfejsow - bez tego
+# konczy sie bledem "Could not determine network interfaces"
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/wg-panel
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

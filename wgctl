@@ -1,0 +1,887 @@
+#!/usr/bin/env python3
+"""wgctl - to samo co panel webowy, tylko z terminala.
+
+Ta sama baza i ten sam helper, zadnej rownoleglej logiki. Wszystko, co
+zrobisz tutaj, widac w panelu i odwrotnie.
+
+    wgctl status
+    wgctl list
+    wgctl add Marek --tier NAS --device laptop
+    wgctl add Ekipa --tier NAS --start 2026-10-01 --until 2026-10-31
+    wgctl add Gosc  --tier NAS --days 7      # 7 dni od pierwszego polaczenia
+    wgctl show Marek
+    wgctl config Marek            # wypisuje plik klienta
+    wgctl qr Marek
+    wgctl rule add Marek --accept 192.168.1.60 --port 9091
+    wgctl rule list Marek
+    wgctl suspend Marek / wgctl resume Marek
+    wgctl rotate Marek
+    wgctl check Marek 192.168.1.50 445
+    wgctl diff
+    wgctl apply [--no-safe] / wgctl confirm / wgctl rollback
+    wgctl backup [--verify]
+    wgctl delete Marek --yes
+    wgctl host list / wgctl host add drukarka 192.168.1.70 / wgctl host del drukarka
+    wgctl integrity
+    wgctl traffic [Marek]
+    wgctl export plik.json [--pass HASLO]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from panel import (db, export, helperclient, model as panel_model, qr, schedule,  # noqa: E402
+                   render, simulate, traffic, watchdog, wgcrypto)
+
+DB_PATH = os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")
+
+BOLD, DIM, GREEN, YELLOW, RED, RESET = (
+    ("\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m")
+    if sys.stdout.isatty() else ("", "", "", "", "", "")
+)
+
+
+def fail(message: str) -> "NoReturn":  # type: ignore[name-defined]
+    print(f"{RED}blad:{RESET} {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def group_hint(path: str) -> str:
+    """Brak dostepu do danych: konto nie jest w grupie wg-panel albo jest, ale ta sesja
+    zalogowala sie wczesniej - grupy wczytuja sie przy logowaniu, np. zaraz po instalacji."""
+    import grp
+    import pwd
+    try:
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        user = os.environ.get("USER") or "twoje-konto"
+    try:
+        group = grp.getgrnam("wg-panel")
+    except KeyError:
+        return f"brak dostepu do {path} - nie ma grupy wg-panel; czy panel jest zainstalowany?"
+    if user in group.gr_mem and group.gr_gid not in os.getgroups():
+        return (f"brak dostepu do {path} - jestes juz w grupie wg-panel, ale ta sesja "
+                "zalogowala sie wczesniej. Wyloguj sie i zaloguj ponownie albo w tym terminalu "
+                "wpisz: newgrp wg-panel")
+    return (f"brak dostepu do {path} - dodaj sie do grupy: sudo usermod -aG wg-panel {user}, "
+            "potem zaloguj sie ponownie (albo w tym terminalu: newgrp wg-panel)")
+
+
+def open_db():
+    if not os.path.exists(DB_PATH):
+        # brak dostepu do katalogu wyglada tak samo jak brak pliku - rozroznij to,
+        # bo najczestsza przyczyna to brak czlonkostwa w grupie wg-panel
+        parent = os.path.dirname(DB_PATH)
+        if os.path.isdir(parent) and not os.access(parent, os.R_OK | os.X_OK):
+            fail(group_hint(parent))
+        fail(f"nie ma bazy {DB_PATH} - czy panel jest zainstalowany?")
+    if not os.access(DB_PATH, os.R_OK | os.W_OK):
+        fail(f"brak dostepu do {DB_PATH} - napraw prawa: "
+             f"sudo chown wg-panel:wg-panel {DB_PATH} && sudo chmod 660 {DB_PATH}, "
+             f"a siebie dodaj do grupy: sudo usermod -aG wg-panel $USER (i zaloguj sie ponownie)")
+    conn = db.connect(DB_PATH)
+    try:
+        db.init_defaults(conn)
+    except sqlite3.OperationalError as exc:
+        fail(f"baza jest tylko do odczytu ({exc}) - napraw prawa: "
+             f"sudo chown wg-panel:wg-panel {DB_PATH} && sudo chmod 660 {DB_PATH}")
+    return conn
+
+
+def find_peer(conn, needle: str):
+    row = conn.execute(
+        """SELECT p.*, t.name AS tier_name, t.client_mode, t.client_list, t.host_access, t.rules_json
+           FROM peers p LEFT JOIN tiers t ON t.id = p.tier_id
+           WHERE p.name = ? OR p.ip = ? OR p.id = ?""",
+        (needle, needle, needle if needle.isdigit() else -1),
+    ).fetchone()
+    if not row:
+        fail(f"nie znam peera {needle!r}")
+    return row
+
+
+def model(conn) -> dict:
+    return panel_model.build(conn)
+
+
+def peers_full(conn) -> list[dict]:
+    return panel_model.peers_for_render(conn)
+
+
+def ago(seconds: int) -> str:
+    if not seconds:
+        return "nigdy"
+    delta = int(time.time()) - seconds
+    if delta < 60:
+        return f"{delta} s temu"
+    if delta < 3600:
+        return f"{delta // 60} min temu"
+    if delta < 86400:
+        return f"{delta // 3600} h temu"
+    return f"{delta // 86400} dni temu"
+
+
+# --------------------------------------------------------------------------
+
+def cmd_status(args, conn) -> int:
+    try:
+        status = helperclient.call("status", {"settings": panel_model.settings_only(conn)})
+    except helperclient.HelperError as exc:
+        fail(str(exc))
+    print(f'{BOLD}interfejs{RESET} {status.get("iface")} '
+          f'{"up" if status.get("up") else "down"}   '
+          f'{BOLD}usluga{RESET} {status.get("service")}   '
+          f'{BOLD}port{RESET} {status.get("listen_port", "?")}')
+    if status.get("missing_tools"):
+        print(f'{YELLOW}brakuje narzedzi:{RESET} {", ".join(status["missing_tools"])}')
+    pending = status.get("pending")
+    if pending:
+        print(f'{YELLOW}zmiana czeka na potwierdzenie{RESET} - '
+              f'{pending["remaining"]} s do cofniecia (wgctl confirm)')
+    if is_dirty(conn, status):
+        print(f'{YELLOW}baza rozni sie od interfejsu{RESET} - wgctl diff / wgctl apply')
+    return 0
+
+
+def is_dirty(conn, status: dict | None = None) -> bool:
+    if status is None:
+        try:
+            status = helperclient.call("status", {"settings": panel_model.settings_only(conn)})
+        except helperclient.HelperError:
+            status = None
+    return panel_model.is_dirty(conn, None, status)
+
+
+def cmd_list(args, conn) -> int:
+    live, live_error = {}, ""
+    try:
+        live = helperclient.call("status",
+                                 {"settings": panel_model.settings_only(conn)}).get("peers", {})
+    except helperclient.HelperError as exc:
+        live_error = str(exc)   # bez tego kolumna HANDSHAKE klamie, ze nikt sie nie laczyl
+    rows = db.peers(conn)
+    if args.json:
+        print(json.dumps([dict(r) for r in rows], indent=2, ensure_ascii=False))
+        return 0
+    print(f'{BOLD}{"NAZWA":<22}{"IP":<13}{"TIER":<8}{"STAN":<11}'
+          f'{"HANDSHAKE":<14}WAZNY DO{RESET}')
+    for peer in rows:
+        stat = live.get(peer["pubkey"], {})
+        expires = db.describe_expiry(peer)
+        colour = {"active": GREEN, "suspended": YELLOW}.get(peer["state"], DIM)
+        print(f'{peer["name"][:21]:<22}{peer["ip"]:<13}'
+              f'{(peer["tier_name"] or "—")[:7]:<8}'
+              f'{colour}{peer["state"]:<11}{RESET}'
+              f'{ago(stat.get("latest_handshake", 0)):<14}{expires}')
+    if live_error:
+        print(f'{YELLOW}uwaga:{RESET} brak danych z interfejsu ({live_error}) - '
+              f'kolumna HANDSHAKE jest pusta, a nie zerowa')
+    return 0
+
+
+def cmd_add(args, conn) -> int:
+    tier = conn.execute("SELECT * FROM tiers WHERE name = ?", (args.tier,)).fetchone()
+    if args.tier and not tier:
+        fail(f'nie ma tieru {args.tier!r}; sa: '
+             + ", ".join(t["name"] for t in db.tiers(conn)))
+    ip = args.ip or db.next_free_ip(conn)
+
+    def day(value, last=True):
+        if not value:
+            return None
+        try:
+            parsed = time.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            fail(f"date podaj jako RRRR-MM-DD, dostalem {value!r}")
+        clock = (23, 59, 59) if last else (0, 0, 0)
+        return int(time.mktime((parsed.tm_year, parsed.tm_mon, parsed.tm_mday,
+                                *clock, 0, 0, -1)))
+
+    mode, starts, expires, days, from_use = "none", None, None, None, 0
+    if args.days:
+        mode, days, from_use = "from_use", args.days, 1
+        if args.start or args.until:
+            fail("--days liczy sie od pierwszego polaczenia; nie laczy sie z --start/--until")
+    elif args.start or args.until:
+        mode = "window"
+        starts, expires = day(args.start, last=False), day(args.until)
+        if starts and expires and starts > expires:
+            fail("--start jest pozniej niz --until")
+
+    state = "suspended" if starts and starts > time.time() else "active"
+
+    private = wgcrypto.genkey()
+    with conn:
+        conn.execute(
+            """INSERT INTO peers(name, device, ip, pubkey, psk, privkey, tier_id,
+                                 state, note, created_at, access_mode, starts_at,
+                                 expires_at, expires_days, expires_from_use, auto_state)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (args.name, args.device or "", ip, wgcrypto.pubkey(private), wgcrypto.genpsk(),
+             private, tier["id"] if tier else None, state, args.note or "",
+             int(time.time()), mode, starts, expires, days, from_use,
+             1 if state == "suspended" else 0),
+        )
+    db.log(conn, "wgctl", "peer.create", f"{args.name} {ip}")
+    peer = conn.execute("SELECT * FROM peers WHERE ip = ?", (ip,)).fetchone()
+    print(f'{GREEN}dodano{RESET} {args.name} -> {ip}   '
+          f'dostep: {db.describe_expiry(peer)}')
+    print(f'{DIM}konfiguracja: wgctl config {args.name}    zastosuj: wgctl apply{RESET}')
+    return 0
+
+
+def cmd_show(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    cfg = db.settings(conn)
+    print(f'{BOLD}{peer["name"]}{RESET}  {peer["ip"]}  tier {peer["tier_name"] or "—"}  '
+          f'stan {peer["state"]}')
+    print(f'{DIM}klucz publiczny{RESET} {peer["pubkey"]}')
+    print(f'{DIM}dostep{RESET} {db.describe_expiry(peer)}')
+    print(f'{DIM}klucz prywatny{RESET} '
+          + ("jeszcze w bazie" if peer["privkey"] else "skasowany z serwera"))
+    rules = db.rules_for(conn, peer["id"])
+    tier_rules = json.loads(peer["rules_json"] or "[]")
+    print(f'\n{BOLD}reguly tieru{RESET}')
+    for rule in tier_rules or [{"action": "—", "dest": "brak regul, pelny dostep"}]:
+        print(f'  {rule.get("action"):<7} {rule.get("dest")}'
+              f'{":" + str(rule.get("ports")) if rule.get("ports") else ""}')
+    print(f'{BOLD}reguly wlasne{RESET}')
+    for rule in rules or []:
+        window = f' {rule["time_from"]}-{rule["time_to"]} {rule["weekdays"]}' \
+            if rule["time_from"] else ""
+        print(f'  [{rule["id"]}] {rule["action"]:<7} {rule["dest"]}'
+              f'{":" + rule["ports"] if rule["ports"] else ""}{window}  {DIM}{rule["comment"]}{RESET}')
+    if not rules:
+        print(f'  {DIM}brak{RESET}')
+    return 0
+
+
+def cmd_config(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    if not peer["privkey"]:
+        fail("klucz prywatny zostal skasowany - zrob rotacje (wgctl rotate)")
+    conf, route = panel_model.client_conf(conn, peer)
+    panel_model.mark_issued(conn, peer["id"], route["allowed"])
+    print(conf)
+    return 0
+
+
+def cmd_qr(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    if not peer["privkey"]:
+        fail("klucz prywatny zostal skasowany - zrob rotacje (wgctl rotate)")
+    conf, route = panel_model.client_conf(conn, peer)
+    panel_model.mark_issued(conn, peer["id"], route["allowed"])
+    print(qr.terminal(conf))
+    return 0
+
+
+def cmd_allowed(args, conn) -> int:
+    """Co u tej osoby idzie przez VPN - linia gotowa do wklejenia w aplikacji."""
+    peer = find_peer(conn, args.name)
+    _unused, route = panel_model.client_conf(conn, peer)
+    source = "ustawione u osoby" if route["own"] else f'z tieru {peer["tier_name"]}'
+    print(f'{BOLD}{peer["name"]}{RESET}: {render.TUNNEL_MODES[route["mode"]]} ({source})')
+    print(f'AllowedIPs = {", ".join(route["allowed"])}')
+    for note in route["notes"]:
+        print(f"{YELLOW}uwaga:{RESET} {note}")
+    if peer["issued_allowed"] and peer["issued_allowed"] != ", ".join(route["allowed"]):
+        print(f'{DIM}w ostatnio wydanym pliku: {peer["issued_allowed"]}{RESET}')
+    return 0
+
+
+def _set_state(conn, name: str, state: str) -> None:
+    peer = find_peer(conn, name)
+    with conn:
+        conn.execute("UPDATE peers SET state = ? WHERE id = ?", (state, peer["id"]))
+    db.log(conn, "wgctl", f"peer.{state}", peer["name"])
+    print(f'{peer["name"]}: {state}')
+
+
+def cmd_set(args, conn) -> int:
+    """Zmiana nazwy, urzadzenia albo tieru istniejacego peera."""
+    peer = find_peer(conn, args.name)
+    changes = []
+    if args.tier:
+        tier = conn.execute("SELECT id FROM tiers WHERE name = ? COLLATE NOCASE",
+                            (args.tier,)).fetchone()
+        if not tier:
+            fail(f"nie ma tieru {args.tier!r}")
+        with conn:
+            conn.execute("UPDATE peers SET tier_id = ? WHERE id = ?", (tier["id"], peer["id"]))
+        changes.append(f"tier {args.tier.upper()}")
+    if args.rename:
+        with conn:
+            conn.execute("UPDATE peers SET name = ? WHERE id = ?", (args.rename, peer["id"]))
+        changes.append(f"nazwa {args.rename}")
+    if args.device is not None:
+        with conn:
+            conn.execute("UPDATE peers SET device = ? WHERE id = ?", (args.device, peer["id"]))
+        changes.append(f"urzadzenie {args.device}")
+    if args.tunnel:
+        mode = "" if args.tunnel == "tier" else args.tunnel
+        listing = ", ".join(i.strip() for i in (args.tunnel_list or "").split(",") if i.strip())
+        if mode == "custom":
+            if not listing:
+                fail("tryb custom wymaga --tunnel-list, np. --tunnel-list nas,drukarka")
+            try:
+                for item in listing.split(","):
+                    render.resolve_dest(item.strip(), db.render_cfg(conn))
+            except render.RuleError as exc:
+                fail(str(exc))
+        with conn:
+            conn.execute("UPDATE peers SET tunnel_mode = ?, tunnel_list = ? WHERE id = ?",
+                         (mode, listing, peer["id"]))
+        changes.append(f"tunel {args.tunnel}" + (f" ({listing})" if listing else ""))
+    if not changes:
+        fail("podaj --tier, --rename, --device albo --tunnel")
+    db.log(conn, "wgctl", "peer.edit", f'{peer["name"]}: ' + ", ".join(changes))
+    print(f'{peer["name"]}: ' + ", ".join(changes) + ". Zastosuj zmiany: wgctl apply")
+    return 0
+
+
+def cmd_suspend(args, conn) -> int:
+    _set_state(conn, args.name, "suspended")
+    return 0
+
+
+def cmd_resume(args, conn) -> int:
+    _set_state(conn, args.name, "active")
+    return 0
+
+
+def cmd_delete(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    if not args.yes:
+        answer = input(f'Usunac {peer["name"]} ({peer["ip"]}) na stale? Wpisz TAK: ')
+        if answer.strip() != "TAK":
+            fail("przerwane")
+    with conn:
+        conn.execute("DELETE FROM rules WHERE peer_id = ?", (peer["id"],))
+        conn.execute("DELETE FROM peers WHERE id = ?", (peer["id"],))
+    db.log(conn, "wgctl", "peer.delete", f'{peer["name"]} {peer["ip"]}')
+    print(f'usunieto {peer["name"]} ({peer["ip"]}) - adres znowu wolny. '
+          f'Zastosuj zmiany: wgctl apply')
+    return 0
+
+
+def cmd_rotate(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    private = wgcrypto.genkey()
+    with conn:
+        conn.execute("UPDATE peers SET privkey=?, pubkey=?, psk=? WHERE id=?",
+                     (private, wgcrypto.pubkey(private), wgcrypto.genpsk(), peer["id"]))
+    db.log(conn, "wgctl", "peer.rotate_keys", peer["name"])
+    print(f'{peer["name"]}: nowe klucze. Przekaz nowa konfiguracje i zastosuj zmiany.')
+    return 0
+
+
+def cmd_rule(args, conn) -> int:
+    peer = find_peer(conn, args.name)
+    if args.rule_action == "list":
+        for rule in db.rules_for(conn, peer["id"]):
+            print(f'[{rule["id"]}] {rule["action"]:<7} {rule["dest"]}'
+                  f'{":" + rule["ports"] if rule["ports"] else ""}  {DIM}{rule["comment"]}{RESET}')
+        return 0
+    if args.rule_action == "del":
+        with conn:
+            conn.execute("DELETE FROM rules WHERE id = ? AND peer_id = ?",
+                         (args.rule_id, peer["id"]))
+        db.log(conn, "wgctl", "rule.delete", f'peer={peer["name"]} rule={args.rule_id}')
+        print("usunieto")
+        return 0
+
+    action = "ACCEPT" if args.accept else "DROP"
+    dest = args.accept or args.drop
+    raw = {"action": action, "dest": dest, "proto": args.proto,
+           "ports": args.port or "", "time_from": args.time_from or "",
+           "time_to": args.time_to or "", "weekdays": args.weekdays or "",
+           "comment": args.comment or ""}
+    try:
+        render.normalize_rule(raw, db.render_cfg(conn))
+    except render.RuleError as exc:
+        fail(str(exc))
+    position = conn.execute(
+        "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM rules WHERE peer_id = ?",
+        (peer["id"],)).fetchone()["p"]
+    with conn:
+        conn.execute(
+            """INSERT INTO rules(peer_id, position, action, dest, proto, ports,
+                                 time_from, time_to, weekdays, comment)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (peer["id"], position, action, dest, args.proto, args.port or "",
+             args.time_from or "", args.time_to or "", args.weekdays or "",
+             args.comment or ""),
+        )
+    db.log(conn, "wgctl", "rule.add", f'peer={peer["name"]} {action} {dest}')
+    print(f'dodano: {action} -> {dest}. Zastosuj zmiany: wgctl apply')
+    return 0
+
+
+def cmd_expire(args, conn) -> int:
+    """Terminy dostepu bez panelu - timer systemd uruchamia to co minute.
+
+    Zmiana trafia na interfejs punktowo: niezastosowane zmiany z panelu zostaja nietkniete.
+    """
+    try:
+        status = helperclient.call("status", {"settings": panel_model.settings_only(conn)})
+    except helperclient.HelperError:
+        status = None
+    result = schedule.run(conn, status=status)
+    if not args.quiet:
+        if result.get("skipped"):
+            print("pominieto - harmonogram panelu pracuje w tej chwili")
+        elif result.get("error"):
+            print(f"blad: {result['error']}")
+        elif result.get("waiting"):
+            print("czeka: zmiana w panelu czeka na potwierdzenie - sprobuje za minute")
+        elif result.get("applied"):
+            print(f"zastosowano terminy: {', '.join(result['names'])}")
+        else:
+            print("terminy zgodne - nic do zrobienia")
+    return 1 if result.get("error") else 0
+
+
+def cmd_guard(args, conn) -> int:
+    """Timer systemd co minute: terminy dostepu i straznik (panel, helper, wg0, zdrowie Pi)."""
+    lines = []
+    try:
+        status = helperclient.call("status", {"settings": panel_model.settings_only(conn)})
+    except helperclient.HelperError:
+        status = None          # helper lezy - alarm wysle straznik, terminow nie ruszamy
+    if status is not None:
+        result = schedule.run(conn, status=status)
+        if result.get("applied"):
+            lines.append(f"terminy: zastosowano ({', '.join(result['names'])})")
+        elif result.get("error"):
+            lines.append(f"terminy: blad {result['error']}")
+    report = watchdog.run(conn)
+    bad = [name for name, ok in report["checks"].items() if not ok]
+    lines.append("straznik: " + ("wszystko dziala" if not bad else "problem: " + ", ".join(bad)))
+    lines += [f"wyslano: {item}" for item in report["sent"]]
+    if not args.quiet or report["sent"] or bad:
+        print("\n".join(lines))
+    return 0
+
+
+def cmd_tls(args, conn) -> int:
+    """Certyfikat HTTPS panelu - odcisk do porownania z tym, co pokazuje telefon."""
+    try:
+        info = helperclient.call("tls", {"settings": panel_model.settings_only(conn),
+                                         "renew": args.renew}, timeout=120)
+    except helperclient.HelperError as exc:
+        fail(f"helper: {exc}")
+    until = time.strftime("%Y-%m-%d", time.localtime(info["not_after"])) if info.get("not_after") else "?"
+    print(f'Odcisk SHA-256 urzedu:  {info["ca_fingerprint"]}')
+    print(f"Certyfikat panelu do:   {until}" + ("  (wlasnie odnowiony)" if info.get("renewed") else ""))
+    print(f'Adresy w certyfikacie:  {", ".join(info["ips"] + info["dns"])}')
+    print(f'Urzad poswiadcza tylko: {", ".join(info["permitted"] + info["dns"])}')
+    if info.get("ca_new"):
+        print("UWAGA: powstal nowy urzad - zainstaluj go ponownie na urzadzeniach (strona /tls).")
+    return 0
+
+
+def cmd_check(args, conn) -> int:
+    cfg = db.render_cfg(conn)
+    peer = find_peer(conn, args.name)
+    result = simulate.simulate(cfg, peers_full(conn), peer["ip"], args.dest,
+                               args.port, args.proto)
+    colour = {"ACCEPT": GREEN, "DROP": RED}.get(result["verdict"], YELLOW)
+    target = f'{args.dest}:{args.port}' if args.port else args.dest
+    print(f'{peer["name"]} ({peer["ip"]}) -> {target}/{args.proto}')
+    print(f'{colour}{BOLD}{result["verdict"]}{RESET}  {result["reason"]}')
+    if args.verbose:
+        print(f'\n{DIM}przejscie lancucha {result.get("chain")}{RESET}')
+        for step in result.get("trace", []):
+            mark = f'{colour}<--{RESET}' if step["matched"] else "   "
+            print(f'  {step["position"]:>3} {step["rule"]}  {mark}')
+    return 0 if result["verdict"] == "ACCEPT" else 2
+
+
+def cmd_diff(args, conn) -> int:
+    payload = model(conn)
+    try:
+        preview = helperclient.call("preview", payload)
+    except helperclient.HelperError as exc:
+        fail(str(exc))
+    conf_diff = render.diff(preview.get("current_wg_conf", ""), preview["wg_conf"])
+    rules_diff = render.diff(preview.get("current_rules", ""), preview["rules"])
+    if conf_diff == "(bez zmian)" and rules_diff == "(bez zmian)":
+        print("nic do zastosowania")
+        return 0
+    for title, text in (("wg0.conf", conf_diff), ("reguly", rules_diff)):
+        print(f'{BOLD}--- {title} ---{RESET}')
+        for line in text.split("\n"):
+            if line.startswith("+") and not line.startswith("+++"):
+                print(f"{GREEN}{line}{RESET}")
+            elif line.startswith("-") and not line.startswith("---"):
+                print(f"{RED}{line}{RESET}")
+            else:
+                print(line)
+    return 0
+
+
+def cmd_apply(args, conn) -> int:
+    cfg = db.settings(conn)
+    payload = model(conn)
+    seconds = 0 if args.no_safe else int(cfg.get("confirm_seconds", "90"))
+    try:
+        result = helperclient.call("apply", dict(payload, confirm_seconds=seconds), timeout=120)
+    except helperclient.HelperError as exc:
+        db.log(conn, "wgctl", "apply.failed", str(exc))
+        fail(str(exc))
+    panel_model.mark_applied(conn, payload, result)
+    db.set_setting(conn, "rolled_back", "")
+    db.set_setting(conn, "drift_findings", "")
+    db.log(conn, "wgctl", "apply.ok", "; ".join(result.get("steps", [])))
+    for step in result.get("steps", []):
+        print(f"  {step}")
+    if result.get("confirm_token"):
+        db.set_setting(conn, "confirm_token", result["confirm_token"])
+        print(f'{YELLOW}Sprawdz polaczenie i potwierdz: wgctl confirm{RESET}')
+        print(f'{DIM}Bez potwierdzenia panel cofnie zmiany za {seconds} s.{RESET}')
+    else:
+        print(f"{GREEN}zastosowane{RESET}")
+    return 0
+
+
+def cmd_confirm(args, conn) -> int:
+    try:
+        result = helperclient.call("confirm",
+                                   {"token": db.settings(conn).get("confirm_token", "")})
+    except helperclient.HelperError as exc:
+        fail(str(exc))
+    panel_model.store_fingerprint(conn, result)
+    db.set_setting(conn, "confirm_token", "")
+    db.log(conn, "wgctl", "apply.confirmed")
+    print(f"{GREEN}potwierdzone{RESET}")
+    return 0
+
+
+def cmd_rollback(args, conn) -> int:
+    try:
+        result = helperclient.call("rollback", {"settings": panel_model.settings_only(conn)},
+                                   timeout=120)
+    except helperclient.HelperError as exc:
+        fail(str(exc))
+    db.set_setting(conn, "applied_hash", "")
+    db.set_setting(conn, "rolled_back", "1")
+    panel_model.store_fingerprint(conn, result)
+    db.log(conn, "wgctl", "rollback", str(result.get("rolled_back")))
+    print(f'{GREEN}cofnieto{RESET} ({result.get("rolled_back")})')
+    print(f'{DIM}na dysku jest wersja sprzed zastosowania; panel nadal ma nowsza - '
+          f'wgctl diff pokaze roznice{RESET}')
+    return 0
+
+
+def cmd_backup(args, conn) -> int:
+    if args.verify:
+        results = export.verify_recent(conn, args.count)
+        if not results:
+            print("nie ma kopii do sprawdzenia")
+            return 0
+        bad = 0
+        for item in results:
+            row = conn.execute("SELECT ts, path FROM backups WHERE id = ?", (item["id"],)).fetchone()
+            stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
+            mark = f"{GREEN}OK  {RESET}" if item["ok"] else f"{RED}BLAD{RESET}"
+            bad += 0 if item["ok"] else 1
+            print(f"  {mark} #{item['id']} {stamp}  {item['detail']}")
+        return 1 if bad else 0
+
+    record = export.run(conn, actor="wgctl")
+    if not record["ok"]:
+        fail(record["detail"])
+    print(f'{GREEN}kopia{RESET} {record["path"]}  '
+          f'({record["bytes"] / 1024:.1f} KiB, {record["detail"]})')
+    print(f'{DIM}sha256 {record["sha256"]}{RESET}')
+    check = record.get("verify")
+    if check:
+        colour = GREEN if check["ok"] else RED
+        print(f'{colour}weryfikacja:{RESET} {check["detail"]}')
+    return 0
+
+
+def cmd_host(args, conn) -> int:
+    if args.host_action == "list":
+        rows = db.hosts(conn)
+        if not rows:
+            print("katalog jest pusty")
+        for row in rows:
+            v6 = f"  {row['address6']}" if row["address6"] else ""
+            print(f'{row["name"]:<16}{row["address"] or "—":<18}{v6}  '
+                  f'{DIM}{row["description"]}{RESET}')
+        return 0
+    name = (args.name or "").lower()
+    if not name:
+        fail("podaj nazwe hosta")
+    if args.host_action == "del":
+        with conn:
+            deleted = conn.execute("DELETE FROM hosts WHERE name = ?", (name,)).rowcount
+        if not deleted:
+            fail(f"nie ma hosta {name!r}")
+        db.log(conn, "wgctl", "host.delete", name)
+        print(f"usunieto {name}")
+        return 0
+    if not args.address and not args.ip6:
+        fail("podaj adres IPv4 albo --ip6")
+    exists = conn.execute("SELECT id FROM hosts WHERE name = ?", (name,)).fetchone()
+    with conn:
+        if exists:
+            conn.execute("UPDATE hosts SET address = ?, address6 = ?, description = ? "
+                         "WHERE name = ?", (args.address or "", args.ip6 or "",
+                                            args.description or "", name))
+        else:
+            conn.execute("INSERT INTO hosts(name, address, address6, description) "
+                         "VALUES (?, ?, ?, ?)", (name, args.address or "", args.ip6 or "",
+                                                 args.description or ""))
+    if name == "nas" and args.address:
+        db.set_setting(conn, "nas", args.address)
+    db.log(conn, "wgctl", "host.edit" if exists else "host.create", name)
+    print(f'{"zmieniono" if exists else "dodano"} {name}. Zastosuj zmiany: wgctl apply')
+    return 0
+
+
+def cmd_restore(args, conn) -> int:
+    """Odtworzenie z kopii - z historii (numer) albo z pliku w katalogu kopii."""
+    if args.source is None:
+        print(f"{BOLD}Kopie do odtworzenia{RESET}")
+        for row in conn.execute("SELECT * FROM backups WHERE ok = 1 ORDER BY id DESC LIMIT 20"):
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
+            where = "NAS" if row["target"] == "smb" else "karta SD"
+            print(f'  #{row["id"]:<4} {when}  {where:<9} {os.path.basename(row["path"])}')
+        for name in export.local_files(db.settings(conn)):
+            print(f"  plik  {name}")
+        if args.nas:
+            try:
+                for name in export.list_smb(db.settings(conn)):
+                    print(f"  nas   {name}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"{RED}NAS:{RESET} {exc}")
+        print(f"\n{DIM}wgctl restore NUMER  |  wgctl restore NAZWA_PLIKU  |  "
+              f"wgctl restore --nas NAZWA_NA_SYNOLOGY{RESET}")
+        return 0
+    if args.source.lstrip("#").isdigit():
+        source = f"id:{args.source.lstrip('#')}"
+    elif args.nas:
+        source = f"smb:{args.source}"
+    else:
+        source = f"file:{args.source}"
+    if not args.yes:
+        answer = input("Odtworzenie zastapi wszystkie peery, tiery i reguly. Wpisz TAK: ")
+        if answer.strip() != "TAK":
+            fail("przerwane")
+    import getpass
+    passphrase = getpass.getpass("Haslo kopii (puste, jesli niezaszyfrowana): ") \
+        if args.passphrase is None else args.passphrase
+    try:
+        summary = export.restore_from(conn, source, passphrase, args.with_users, "wgctl")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"odtwarzanie nieudane: {exc}")
+    print(f'{GREEN}odtworzono{RESET} z {summary["source"]}: {summary["peers"]} peerow, '
+          f'{summary["tiers"]} tierow, {summary["rules"]} regul')
+    print(f'{DIM}poprzedni stan zapisany jako {summary["safety"]}{RESET}')
+    print("Zastosuj zmiany: wgctl diff && wgctl apply")
+    return 0
+
+
+def cmd_totp(args, conn) -> int:
+    """Awaryjne wylaczenie kodu z aplikacji - np. po zgubieniu telefonu."""
+    row = conn.execute("SELECT id FROM users WHERE username = ?", (args.username,)).fetchone()
+    if not row:
+        fail(f"nie ma konta {args.username!r}")
+    with conn:
+        conn.execute("UPDATE users SET totp_secret = NULL WHERE id = ?", (row["id"],))
+    db.log(conn, "wgctl", "account.totp_off", args.username)
+    print(f"kod z aplikacji wylaczony dla {args.username} - logowanie samym haslem")
+    return 0
+
+
+def cmd_integrity(args, conn) -> int:
+    expected = panel_model.fingerprint(conn)
+    if not expected:
+        fail("nic jeszcze nie zastosowano z panelu - nie ma wzorca do porownania")
+    try:
+        findings = helperclient.call("drift", {"settings": panel_model.settings_only(conn),
+                                               "expected": expected}).get("findings", [])
+    except helperclient.HelperError as exc:
+        fail(str(exc))
+    if not findings:
+        print(f"{GREEN}stan zgodny z tym, co zastosowal panel{RESET}")
+        return 0
+    for finding in findings:
+        colour = RED if finding.get("severity") == "alarm" else YELLOW
+        print(f'{colour}{finding["kind"]:<8}{RESET} {finding["message"]}')
+    print(f"\n{DIM}przywrocenie: wgctl apply{RESET}")
+    return 3
+
+
+def cmd_traffic(args, conn) -> int:
+    peer = find_peer(conn, args.name) if args.name else None
+    series = traffic.hourly(conn, peer["pubkey"] if peer else None, args.days)
+    rx, tx = traffic.totals(series)
+    label = peer["name"] if peer else "wszyscy"
+    print(f"{BOLD}{label}{RESET} - ostatnie {args.days} dni")
+    print(f"  pobrane przez klienta: {traffic.human(tx)}")
+    print(f"  wyslane przez klienta: {traffic.human(rx)}")
+    per_day: dict[str, int] = {}
+    for point in series:
+        day = time.strftime("%a %d.%m", time.localtime(point["ts"]))
+        per_day[day] = per_day.get(day, 0) + point["rx"] + point["tx"]
+    peak = max(per_day.values() or [1]) or 1
+    for day, value in per_day.items():
+        bar = "#" * int(40 * value / peak)
+        print(f"  {day}  {bar:<40} {traffic.human(value)}")
+    return 0
+
+
+def cmd_export(args, conn) -> int:
+    blob, encrypted = export.serialize(conn, args.passphrase or "")
+    with open(args.path, "wb") as handle:
+        handle.write(blob)
+    os.chmod(args.path, 0o600)
+    db.log(conn, "wgctl", "backup.export", args.path)
+    print(f'{GREEN}zapisano{RESET} {args.path} '
+          f'({"zaszyfrowane" if encrypted else "JAWNYM TEKSTEM - zawiera PSK"})')
+    return 0
+
+
+# --------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="wgctl", description="Zarzadzanie wg-panel z terminala")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("status", help="stan tunelu i czy sa niezastosowane zmiany")
+
+    listing = sub.add_parser("list", help="lista peerow")
+    listing.add_argument("--json", action="store_true")
+
+    add = sub.add_parser("add", help="nowy peer")
+    add.add_argument("name")
+    add.add_argument("--tier", default="")
+    add.add_argument("--ip", default="")
+    add.add_argument("--device", default="")
+    add.add_argument("--note", default="")
+    add.add_argument("--start", default="", metavar="RRRR-MM-DD",
+                     help="poczatek okna terminowego")
+    add.add_argument("--until", default="", metavar="RRRR-MM-DD",
+                     help="koniec okna terminowego")
+    add.add_argument("--days", type=int, default=0, metavar="N",
+                     help="N dni liczone od pierwszego polaczenia")
+
+    for name, help_text in [("show", "szczegoly peera"), ("config", "plik klienta"),
+                            ("qr", "kod QR"), ("suspend", "zawies"),
+                            ("resume", "wznow"), ("rotate", "nowe klucze")]:
+        item = sub.add_parser(name, help=help_text)
+        item.add_argument("name")
+
+    guard = sub.add_parser("guard", help="straznik i terminy dostepu (timer systemd co minute)")
+    guard.add_argument("--quiet", action="store_true")
+
+    expire = sub.add_parser("expire", help="terminy dostepu teraz (bez panelu)")
+    expire.add_argument("--quiet", action="store_true")
+
+    tls = sub.add_parser("tls", help="certyfikat HTTPS panelu: odcisk, waznosc, adresy")
+    tls.add_argument("--renew", action="store_true", help="wystaw nowy certyfikat teraz")
+
+    delete = sub.add_parser("delete", help="usun peera na stale (adres wraca do puli)")
+    delete.add_argument("name")
+    delete.add_argument("--yes", action="store_true")
+
+
+    rule = sub.add_parser("rule", help="reguly wlasne peera")
+    rule.add_argument("rule_action", choices=["add", "del", "list"])
+    rule.add_argument("name")
+    rule.add_argument("--accept", metavar="CEL")
+    rule.add_argument("--drop", metavar="CEL")
+    rule.add_argument("--proto", default="any", choices=["any", "tcp", "udp"])
+    rule.add_argument("--port", default="", metavar="80,443")
+    rule.add_argument("--time-from", dest="time_from", default="")
+    rule.add_argument("--time-to", dest="time_to", default="")
+    rule.add_argument("--weekdays", default="")
+    rule.add_argument("--comment", default="")
+    rule.add_argument("--rule-id", dest="rule_id", type=int, default=0)
+
+    check = sub.add_parser("check", help="symulacja: czy peer dosiegnie celu")
+    check.add_argument("name")
+    check.add_argument("dest")
+    check.add_argument("port", nargs="?", type=int)
+    check.add_argument("--proto", default="tcp", choices=["tcp", "udp"])
+    check.add_argument("-v", "--verbose", action="store_true", help="pokaz cale przejscie")
+
+    sub.add_parser("diff", help="co zmieni najblizsze zastosowanie")
+    apply_cmd = sub.add_parser("apply", help="zastosuj zmiany")
+    apply_cmd.add_argument("--no-safe", action="store_true",
+                           help="bez bezpiecznika z automatycznym cofnieciem")
+    sub.add_parser("confirm", help="potwierdz ostatnia zmiane")
+    sub.add_parser("rollback", help="cofnij do poprzedniej konfiguracji")
+    backup = sub.add_parser("backup", help="zrob kopie zgodnie z ustawieniami")
+    backup.add_argument("--verify", action="store_true",
+                        help="zamiast robic kopie, sprawdz sumy kontrolne ostatnich")
+    backup.add_argument("--count", type=int, default=5)
+
+    host = sub.add_parser("host", help="katalog hostow LAN")
+    host.add_argument("host_action", choices=["list", "add", "del"])
+    host.add_argument("name", nargs="?")
+    host.add_argument("address", nargs="?", help="adres IPv4")
+    host.add_argument("--ip6", default="")
+    host.add_argument("--description", default="")
+
+    sub.add_parser("integrity", help="czy ktos zmienil konfiguracje poza panelem")
+
+    rest = sub.add_parser("restore", help="odtworz z kopii (bez argumentu: lista kopii)")
+    rest.add_argument("source", nargs="?", help="numer kopii z listy albo nazwa pliku")
+    rest.add_argument("--passphrase", default=None)
+    rest.add_argument("--with-users", action="store_true", help="odtworz tez konta panelu")
+    rest.add_argument("--yes", action="store_true")
+    rest.add_argument("--nas", action="store_true",
+                      help="lista i odtwarzanie wprost z NAS (nowy system)")
+
+    setp = sub.add_parser("set", help="zmien nazwe, urzadzenie albo tier peera")
+    setp.add_argument("name", help="nazwa albo adres IP peera")
+    setp.add_argument("--tier", default="")
+    setp.add_argument("--rename", default="")
+    setp.add_argument("--device", default=None)
+    setp.add_argument("--tunnel", default="", choices=["", "tier", "full", "auto", "lan", "custom"],
+                      help="co idzie przez VPN: tier (jak w tierze), full, auto, lan, custom")
+    setp.add_argument("--tunnel-list", default="", help="dla custom: np. nas,drukarka")
+
+
+    allowed = sub.add_parser("allowed", help="co u osoby idzie przez VPN (linia AllowedIPs)")
+    allowed.add_argument("name")
+
+    totp = sub.add_parser("totp", help="wylacz kod z aplikacji dla konta panelu")
+    totp.add_argument("action", choices=["off"])
+    totp.add_argument("username")
+
+    stats = sub.add_parser("traffic", help="ruch z ostatnich dni")
+    stats.add_argument("name", nargs="?")
+    stats.add_argument("--days", type=int, default=7)
+
+    export_cmd = sub.add_parser("export", help="zapisz kopie do pliku")
+    export_cmd.add_argument("path")
+    export_cmd.add_argument("--pass", dest="passphrase", default="")
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    handler = globals()[f"cmd_{args.command}"]
+    conn = open_db()
+    try:
+        return handler(args, conn)
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

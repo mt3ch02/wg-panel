@@ -1,0 +1,21 @@
+[Unit]
+Description=wg-panel - straznik i terminy dostepu
+After=wg-panel-helper.service
+
+[Service]
+Type=oneshot
+User=wg-panel
+Group=wg-panel
+# pliki straznika (stan, blokada) z prawem zapisu dla grupy - tak jak w panelu
+UMask=0007
+# te same wartosci co w wg-panel.service - instalator zmienia je razem
+Environment=WGPANEL_DB=/var/lib/wg-panel/panel.db
+Environment=WGPANEL_SOCKET=/run/wg-panel/helper.sock
+Environment=WGPANEL_PORT=8080
+Environment=WGPANEL_TLS=1
+ExecStart=/usr/bin/python3 /opt/wg-panel/wgctl guard --quiet
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/wg-panel
