@@ -115,7 +115,7 @@ sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
 ```
 
-> Without Git: download the archive from GitHub (Code → Download ZIP, or the Releases page) and copy it to the Pi with `scp`. **Unpack it on the Pi, not on Windows** — Windows drops the executable bit and `./install.sh` stops running. On the Pi: `unzip wg-panel-*.zip && mv wg-panel-*/ ~/wg-panel` (run `sudo apt install -y unzip` first if needed). The folder inside the archive is named e.g. `wg-panel-main`, hence the rename.
+> Without Git: download the archive from GitHub (Code → Download ZIP, or the Releases page), copy it to the Pi with `scp` and unpack it to `~/wg-panel`.
 
 ---
 
@@ -220,7 +220,7 @@ The panel starts with example values (the table at the top of this guide). **Rep
 | Listen port | the WireGuard port, e.g. `51820` |
 | NAS address | your NAS's address (goes into the host catalog as `nas`) |
 | DNS for full mode | e.g. `9.9.9.9` — Quad9: blocks malicious domains and doesn't profile queries |
-| **Endpoint for clients** | the public address and port at which your home is reachable, e.g. `203.0.113.10:51820` or `yourname.duckdns.org:51820` (on path A: the same as the `Endpoint` field in your existing client files) |
+| **Endpoint for clients** | the public address and port at which your home is reachable, e.g. `83.11.9.240:51820` or `home.duckdns.org:51820` (on path A: the same as the `Endpoint` field in your existing client files) |
 
 > ⚠ **The LAN subnet must match your real network.** The NAS tier ends with a "block the LAN" rule, and `LAN` is exactly the subnet from Settings. With a wrong value, a person in the NAS tier will **not** be blocked on your real network. After saving the settings, verify it with the simulator (Step 13).
 
@@ -473,7 +473,7 @@ You should see: `deny (incoming)`, a rule for port 22 from your LAN and a rule f
 **Where: your router's admin panel**
 
 1. Port forwarding: **UDP 51820 → 192.168.1.10:51820**.
-2. Write down the public address at which your home is reachable: a fixed IP from your ISP or a DDNS name (e.g. `yourname.duckdns.org`). This will be the **Endpoint** in Step B9.
+2. Write down the public address at which your home is reachable: a fixed IP from your ISP or a DDNS name (e.g. `home.duckdns.org`). This will be the **Endpoint** in Step B9.
 
 > If your ISP changes your public IP, set up DDNS — otherwise the VPN breaks for everyone at once when the address changes.
 
@@ -504,7 +504,7 @@ Do **Step 7** and **Step 8** from path A.
 
 **Where: Browser → Settings**
 
-As in **Step 9** from path A. The most important field is **Endpoint for clients** — the address from Step B5 with the port, e.g. `yourname.duckdns.org:51820`. Also check **Pi's address on the home network** and the **LAN subnet**.
+As in **Step 9** from path A. The most important field is **Endpoint for clients** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820`. Also check **Pi's address on the home network** and the **LAN subnet**.
 
 ## Step B10 — Add people
 
@@ -646,9 +646,9 @@ As in **Step B13**. People connect with their old files — nobody changes anyth
 **Where: Phone, then Browser → Alerts**
 
 1. Install the **ntfy** app on your phone (no account needed).
-2. Generate a random topic name. On the Pi: `echo wg-home-$(openssl rand -hex 8)` — you get `wg-home-` plus 16 random characters. Write it down. **Don't copy an example from any guide:** an ntfy topic works like a password — anyone who knows its name can read your alerts (people's names, addresses).
+2. Make up a long random topic name, e.g. `wg-home-k7f2q9x4m1` — at least 12 characters, with digits.
 3. In the app: **+** → enter that name → **Subscribe**.
-4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/` + your topic name (e.g. `https://ntfy.sh/wg-home-YOUR-RANDOM-CHARS`), **Save**.
+4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/wg-home-k7f2q9x4m1`, **Save**.
 5. Click **Send test alert**.
 
 You should see on your phone: "wg-panel: test powiadomień" (the notification text is currently in Polish).
@@ -657,9 +657,11 @@ You should see on your phone: "wg-panel: test powiadomień" (the notification te
 
 > **Optional — access token:** if you create an account on ntfy.sh and reserve the topic (or run your own ntfy server), enter the `tk_...` token in the **ntfy token** field. Then the topic is protected regardless of its name.
 
-> **Priorities:** the most serious events — the same key from a new address, configuration changed outside the panel, the `wg0` interface down — arrive with the highest priority (your phone rings louder). The rest arrive normally.
+> **Priorities:** the most serious events — the same key from a new address, the same file on two devices at once, configuration changed outside the panel, the `wg0` interface down — arrive with the highest priority (your phone rings louder). The rest arrive normally, including "working again" and "stopped".
 
 > **The most important alert is "address change".** It fires when someone connects with somebody's key from a new place — the first sign that a configuration file leaked.
+
+> **The "tunnel on two devices" alert.** It fires when the same configuration file is switched on on two devices at once — e.g. a computer at home was left with the VPN on while the same person connects with the same file from work. WireGuard answers whichever device spoke last, so the two kick each other out and the connection keeps dropping (e.g. RDP disconnects when you click). The panel usually notices within a few minutes. The alert lists both addresses, the person gets a red **2 devices** badge in the peer list, and their page explains what to do. When the second device hasn't been seen for 10 minutes, a "stopped hopping" entry appears in Alerts. This alert also catches a copied file used at the same time as its owner's. You can turn it off in Alerts → Notification settings → **Tunnel on two devices at once** (on by default).
 
 **Optionally — also by e-mail:** Alerts → **E-mail (optional)**: check "Also send alerts by e-mail", enter the SMTP server (e.g. `smtp.gmail.com`, port 587, STARTTLS), login, password, recipient. Use a **separate account and an app password** — the password is stored on the Pi. E-mail works alongside ntfy, not instead of it.
 
@@ -862,6 +864,8 @@ You should see: a green monitor. Test: unplug the Pi — within a few minutes a 
 5. When they confirm it works — click **Issued — delete the key**.
 
 > **Deleting the key** means that even a leaked database can't be used to impersonate that person. The panel also remembers what scope they were given, so it can later warn you when their file gets out of date.
+
+> **One peer = one device.** Someone who needs the VPN on a laptop and at work gets two peers, e.g. "Anna laptop" and "Anna work" — each with its own file. One file can't be used on two devices at once: they kick each other out, and the panel will send a "tunnel on two devices" alert. Tell the person you hand a file to — the file is like a house key, you don't copy it onto other devices.
 
 ## Time-limited access
 
@@ -1075,6 +1079,8 @@ The **Hosts** tab: enter once `printer = 192.168.1.70`, `vault = 192.168.1.x` an
 | lost phone with the login code | `wgctl totp off admin` |
 | `wgctl`: "you are already in the wg-panel group, but this session…" | log out and in again, or `newgrp wg-panel` |
 | `wgctl`: "no access … add yourself to the group" | `sudo usermod -aG wg-panel $USER`, then as above (reinstalling does it too) |
+| "tunnel on two devices" alert, or one person's connection keeps dropping | the same file is running on two devices — ask them to switch the tunnel off on one. If you can't tell where the other one is: **Key rotation** on their page and a new file only on the right device. If they need two devices, add a second peer |
+| one person's RDP disconnects when clicking, and there is no two-devices alert | probably MTU on their link: in the WireGuard app → Edit → under `[Interface]` add `MTU = 1280` |
 | notification "panel: problem" | `journalctl -u wg-panel -n 40`; the VPN keeps working, and so do access deadlines (the watchdog) |
 | "helper: problem" | `journalctl -u wg-panel-helper -n 40`; without the helper the panel can't apply changes |
 | "WireGuard interface: problem" | **users have no access** — `systemctl status wg-quick@wg0`, then `sudo systemctl restart wg-quick@wg0` |
@@ -1205,18 +1211,7 @@ git pull
 sudo ./install.sh
 ```
 
-The installer is safe to run again: it replaces the program and the services, and **your data (database, keys, backups) stays**. It pauses the watchdog during the update.
-
-> **Pass the same options you installed with.** The installer doesn't remember earlier options (`LAN_ACCESS`, `BIND_HOST`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) — run without them, it goes back to the defaults. If you installed with home-network access and update without `LAN_ACCESS`, the panel becomes reachable only over the VPN. Example: `sudo LAN_ACCESS=192.168.1.0/24 ./install.sh`.
->
-> Don't remember what you installed with? Check:
->
-> ```bash
-> systemctl cat wg-panel | grep WGPANEL_
-> sudo ufw status | grep wg-panel
-> ```
->
-> `WGPANEL_HOST=0.0.0.0` means `LAN_ACCESS` was used — the subnet is in the ufw rule "wg-panel LAN". `WGPANEL_PORT` other than `8080` is `BIND_PORT`, and `WGPANEL_TLS=0` is `TLS=0`.
+The installer is safe to run again: it replaces the program and the services, and **your data (database, keys, backups) stays**. It pauses the watchdog during the update. If you installed with options (`LAN_ACCESS`, `BIND_HOST`, `INSTALL_LANG`), pass them again.
 
 The `~/wg-panel` directory (the cloned repository) isn't needed for the panel to run — the installer copied everything from it into `/opt/wg-panel`. You can delete it and clone again for the next update.
 

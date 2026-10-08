@@ -1,7 +1,8 @@
 """Watek tla: pilnuje wygasania dostepu, zbiera alerty i robi kopie dobowe.
 
-Chodzi w procesie panelu, budzi sie co 30 sekund. Zadna z tych rzeczy nie
-wymaga roota - apply idzie przez helpera tak samo jak z przegladarki.
+Chodzi w procesie panelu. Co 5 sekund bierze lekka probke adresow peerow (wykrywanie tego
+samego pliku na dwoch urzadzeniach - panel/dual.py), reszta co 30 sekund. Zadna z tych
+rzeczy nie wymaga roota - apply idzie przez helpera tak samo jak z przegladarki.
 """
 from __future__ import annotations
 
@@ -11,18 +12,23 @@ import time
 
 import json
 
-from . import schedule, db, export, notify, traffic
+from . import dual, schedule, db, export, notify, traffic
 
 TICK = 30
+FAST = 5     # probka adresow: przy 30 s drugie urzadzenie umykaloby miedzy probkami
 
 
 class Scheduler(threading.Thread):
     daemon = True
 
-    def __init__(self, conn: sqlite3.Connection, status_fn, log=print):
+    def __init__(self, conn: sqlite3.Connection, status_fn, log=print, peers_fn=None):
         super().__init__(name="wg-panel-scheduler")
         self.conn = conn
         self.status_fn = status_fn    # () -> (status, error)
+        self.peers_fn = peers_fn      # () -> {pubkey: {endpoint, latest_handshake}} albo None
+        self.dual = dual.Watch()
+        self.fast_ok = False          # czy szybka probka dziala (starszy helper jej nie zna)
+        self.last_tick = 0.0
         self.log = log
         self.last_backup = 0.0
         self.last_sample = 0.0
@@ -35,13 +41,20 @@ class Scheduler(threading.Thread):
 
     def run(self) -> None:
         time.sleep(3)  # niech panel wstanie do konca
-        while not self.stop_event.wait(TICK):
-            for step in (self.check_expiry, self.check_alerts, self.check_backup,
-                         self.check_integrity, self.check_anomalies):
-                try:
-                    step()
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"scheduler: {step.__name__}: {exc!r}")
+        while not self.stop_event.wait(FAST):
+            self.tick()
+
+    def tick(self) -> None:
+        steps = [self.check_devices]
+        if time.monotonic() - self.last_tick >= TICK or not self.last_tick:
+            self.last_tick = time.monotonic()
+            steps += [self.check_expiry, self.check_alerts, self.check_backup,
+                      self.check_integrity, self.check_anomalies]
+        for step in steps:
+            try:
+                step()
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"scheduler: {step.__name__}: {exc!r}")
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -51,6 +64,14 @@ class Scheduler(threading.Thread):
     def check_expiry(self) -> None:
         """Terminy dostepu - wspolna logika z wgctl expire (timer systemd), zmiana punktowa."""
         schedule.run(self.conn)
+
+    # --- ten sam plik na dwoch urzadzeniach ---
+
+    def check_devices(self) -> None:
+        live = self.peers_fn() if self.peers_fn else None
+        self.fast_ok = live is not None
+        if live is not None:
+            self.dual.observe(self.conn, live)
 
     # --- alerty ---
 
@@ -73,11 +94,14 @@ class Scheduler(threading.Thread):
                 db.log(self.conn, "harmonogram", "history.prune",
                        f"dziennik: {audit}, alerty: {alerts}")
             self.last_prune = time.time()
+        if not self.fast_ok:
+            # bez szybkiej probki (np. helper jeszcze w starszej wersji) - chociaz co 30 s
+            self.dual.observe(self.conn, status.get("peers", {}))
 
         if cfg.get("alerts_channel", "none") == "none" and \
                 cfg.get("alert_dead_hours", "0") in ("", "0"):
             return
-        notify.check_peers(self.conn, status)
+        notify.check_peers(self.conn, status, skip_endpoint=self.dual.suspects)
 
     def activate_pending(self, status: dict) -> None:
         schedule.activate_first_use(self.conn, status)

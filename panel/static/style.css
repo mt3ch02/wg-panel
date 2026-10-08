@@ -870,6 +870,9 @@ code.fingerprint { display: inline-block; overflow-wrap: anywhere; font-size: 13
 .sub-row pre { margin: 0; overflow-x: auto; }
 form.row [hidden] { display: none !important; }
 details.email-box { flex: 1 1 100%; }
+.alert-kinds { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.alert-kinds > label.check { flex: 0 1 auto; padding-right: 0; }
+.banner.dual-box code { white-space: nowrap; }
 details.email-box > p { margin: 8px 0 12px; }
 
 /* kopie: pole wyboru w pierwszej kolumnie, pod palec na telefonie */

@@ -666,7 +666,7 @@ def cmd_restore(args, conn) -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"{RED}NAS:{RESET} {exc}")
         print(f"\n{DIM}wgctl restore NUMER  |  wgctl restore NAZWA_PLIKU  |  "
-              f"wgctl restore --nas NAZWA_NA_SYNOLOGY{RESET}")
+              f"wgctl restore --nas NAZWA_NA_NAS{RESET}")
         return 0
     if args.source.lstrip("#").isdigit():
         source = f"id:{args.source.lstrip('#')}"

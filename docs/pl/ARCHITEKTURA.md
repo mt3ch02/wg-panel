@@ -395,6 +395,7 @@ kto by potwierdził. Usunięcie wygasłego peera nie może odciąć administrato
 | `dead_peer` | brak handshake'u dłużej niż próg | ostrzeżenie |
 | `expired` | peer stracił ważność i został zawieszony | informacja |
 | `window_open` | okno terminowe peera się otworzyło (w dzienniku) | — |
+| `two_devices` | ten sam plik działa na dwóch urządzeniach naraz (adres przeskakuje A → B → A) | alarm; „ustało” — informacja |
 | `backup` | kopia zapasowa się nie powiodła | alarm |
 | `apply` | automatyczne zastosowanie zmian się nie powiodło | alarm |
 
@@ -402,7 +403,18 @@ kto by potwierdził. Usunięcie wygasłego peera nie może odciąć administrato
 samego portu jest ignorowana (normalne przy NAT), liczy się zmiana adresu. Ten sam alert nie
 powtarza się częściej niż co `alerts_quiet_minutes`.
 
-Kanały: **ntfy** (POST z nagłówkami Title/Priority/Tags) albo **webhook** (JSON). Bez SMTP.
+**`two_devices`.** WireGuard nie ma „jednej sesji na klucz” — dwa urządzenia z tym samym plikiem
+wyrzucają się nawzajem i połączenie co chwilę się zrywa. Panel co 5 s bierze lekką próbkę
+`wg show dump` (operacja helpera `peers`) i liczy zdarzenia: powrót adresu (IP:port) do wartości
+sprzed chwili oraz handshake szybciej niż 90 s po poprzednim. Alarm: w ciągu 10 minut co najmniej
+3 zdarzenia, w tym co najmniej 2 powroty — zwykła zmiana sieci (A → B) ani wielokrotne
+włączanie tunelu (za każdym razem nowy port) go nie wywołają. Na liście peerów plakietka
+„2 urządzenia”, na karcie peera opis z adresami. Po 10 minutach spokoju wpis „przeskakiwanie
+ustało” (priorytet zwykły). Dopóki adres przeskakuje, osobny `new_endpoint` dla tej osoby jest
+wyciszony. Przełącznik: Alerty → Ustawienia powiadomień (`alert_two_devices`, domyślnie włączony).
+Trwające incydenty trzymane są w tabeli `dual_use`, żeby restart panelu ich nie gubił.
+
+Kanały: **ntfy** (POST w formacie JSON) albo **webhook** (JSON); opcjonalnie dodatkowo e-mail (SMTP).
 
 ## Kopie zapasowe
 
@@ -553,7 +565,8 @@ NAS (udział backup)/wg-panel/ kopie na NAS-ie (+ .sha256)
 | `panel/db.py` | baza SQLite: tabele, ustawienia domyślne, porządki po starszych wersjach |
 | `panel/model.py` | co dokładnie idzie do helpera przy zastosowaniu |
 | `panel/render.py` | generowanie `wg0.conf`, reguł zapory i plików dla klientów |
-| `panel/schedule.py`, `scheduler.py` | terminy dostępu; wątek w tle: alerty, kopie dobowe, integralność |
+| `panel/schedule.py`, `scheduler.py` | terminy dostępu; wątek w tle: co 5 s próbka adresów peerów, co 30 s alerty, kopie dobowe, integralność |
+| `panel/dual.py` | wykrywanie tego samego pliku na dwóch urządzeniach naraz |
 | `panel/watchdog.py` | strażnik |
 | `panel/notify.py` | powiadomienia: ntfy, webhook, e-mail |
 | `panel/export.py`, `cryptobox.py` | kopie zapasowe, szyfrowanie, NAS, odtwarzanie |

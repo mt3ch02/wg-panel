@@ -29,7 +29,7 @@ Built for a home or small-office setup on a Raspberry Pi: a handful of people, o
 | **Split tunnel or full** | per tier or per person: all traffic, only what they can reach, whole LAN, or a custom list |
 | **Server access control** | SSH/RDP to the Pi only for chosen peers, in a separate chain |
 | **Backups** | daily, local or to a NAS over SMB; SHA-256 checksums verified by re-downloading; optional ChaCha20 + HMAC encryption |
-| **Alerts** | new address for a known key (leaked config?), silent peer, expiry, failed backup — via ntfy, webhook or e-mail |
+| **Alerts** | new address for a known key (leaked config?), the same file used on two devices at once (the cause of "the VPN keeps dropping"), silent peer, expiry, failed backup — via ntfy, webhook or e-mail |
 | **Watchdog** | independent systemd timer: panel, helper, `wg0`, Pi temperature, power, disk, certificate |
 | **Integrity check** | detects config changes made outside the panel |
 | **Traffic history** | 7-day chart and anomaly detection |
@@ -68,7 +68,7 @@ Then open the panel, create an account, and **check the network settings** (LAN 
 | a clean system | **B** — new server key, new VPN |
 | a clean system and a panel backup + your server key | **C** — restore; nobody changes anything |
 
-Installer options: `LAN_ACCESS=192.168.1.0/24` (open the panel to your home network), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Update with `git pull && sudo ./install.sh`, passing **the same options you installed with** (the installer doesn't remember them; without `LAN_ACCESS` the panel goes back to VPN-only) — your data stays. Remove with `sudo /opt/wg-panel/uninstall.sh` (the VPN keeps running).
+Installer options: `LAN_ACCESS=192.168.1.0/24` (open the panel to your home network), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Update with `git pull && sudo ./install.sh` — your data stays. Remove with `sudo /opt/wg-panel/uninstall.sh` (the VPN keeps running).
 
 ## How it works
 

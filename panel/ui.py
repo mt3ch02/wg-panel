@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.parse
 
-from . import db, i18n, notify, render
+from . import db, dual, i18n, notify, render
 from .i18n import _
 
 
@@ -898,9 +898,13 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
               warnings: dict | None = None, drift: list | None = None,
               chart: list | None = None, rolled_back: bool = False,
               can_discard: bool = False, diff_parts: list | None = None,
-              discard_enough: bool = False) -> str:
+              discard_enough: bool = False, dual_use: dict | None = None) -> str:
     expiry = expiry or {}
     warnings = warnings or {}
+    dual_use = dual_use or {}
+    dual_badge = ('<span class="badge dead" title="' +
+                  e(_("Ten sam plik konfiguracyjny działa na dwóch urządzeniach naraz")) + '">' +
+                  e(_("2 urządzenia")) + '</span>')
     rows = []
     live = (status or {}).get("peers", {})
     labels = {"ip": "IP", "tier": _("Tier"), "hs": "Handshake", "traffic": _("Ruch"),
@@ -917,6 +921,8 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
             transfer = f'{_bytes(stat.get("rx", 0))} / {_bytes(stat.get("tx", 0))}'
         warning = ('<span class="badge warn">' + e(warnings[peer["id"]]) + '</span>'
                    if warnings.get(peer["id"]) else "")
+        if peer["id"] in dual_use:
+            warning += dual_badge
         rows.append(f"""
           <tr data-peer="{peer['id']}">
             <td class="c-name"><a href="/peers/{peer['id']}"><strong>{e(peer['name'])}</strong></a>
@@ -1077,7 +1083,8 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
                 flash: str = "", error: str = "", alerts: int = 0,
                 expiry_text: str = "", warning: str = "",
                 chart: list | None = None, route: dict | None = None,
-                issued: dict | None = None, just_created: bool = False) -> str:
+                issued: dict | None = None, just_created: bool = False,
+                dual_use: dict | None = None) -> str:
     route = route or {"mode": "auto", "own": False, "allowed": [], "notes": []}
     issued = issued or {"state": "unknown"}
     expiry_text = expiry_text or _("bezterminowo")
@@ -1209,6 +1216,21 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
           <button>{_("Oznacz jako wysłany")}</button>
         </form>"""
 
+    dual_box = ""
+    if dual_use:
+        since = dual_use["since"]
+        same_day = time.strftime("%Y-%m-%d", time.localtime(since)) == time.strftime("%Y-%m-%d")
+        since_text = time.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M", time.localtime(since))
+        dual_box = '<div class="banner err dual-box"><span>' + _(
+            "{lead} Od {since} adres przeskakuje między: {endpoints}. Urządzenia wyrzucają się "
+            "nawzajem, stąd przerwy w połączeniu. Wyłącz tunel na jednym z nich. Jeśli nie wiesz, "
+            "czyje jest drugie, użyj „Rotacja kluczy” i wyślij nowy plik tylko na właściwe "
+            "urządzenie. Kto potrzebuje VPN na dwóch urządzeniach, dostaje drugiego peera.",
+            lead="<strong>" + _("Ten sam plik konfiguracyjny działa na dwóch urządzeniach naraz.")
+                 + "</strong>",
+            since=e(since_text),
+            endpoints=", ".join("<code>" + e(ep) + "</code>" for ep in dual_use["endpoints"])
+        ) + '</span></div>'
     more = ('<a class="button" href="/peers/new">' + _("Dodaj kolejnego peera") + '</a>'
             if just_created else "")
     warning_badge = '<span class="badge warn">' + e(warning) + '</span>' if warning else ""
@@ -1246,6 +1268,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
             </form>
           </div>
         </div>
+        {dual_box}
         <div class="stats">
           <div><span class="muted">{_("adres")}</span><strong>{e(peer['ip'])}</strong></div>
           {ip6}
@@ -1824,7 +1847,10 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
         {weak_box}
         <p class="muted">{_("Najważniejszy alert to {alert} - ten sam klucz łączy się z nowego "
                             "adresu. To pierwszy sygnał, że plik konfiguracyjny wyciekł.",
-                            alert="<code>new_endpoint</code>")}</p>
+                            alert="<code>new_endpoint</code>")}
+          {_("{alert} przychodzi, gdy ten sam plik działa na dwóch urządzeniach naraz - "
+             "wyrzucają się wtedy nawzajem i połączenie co chwilę się zrywa.",
+             alert="<code>two_devices</code>")}</p>
         <form method="post" action="/alerts/settings" class="row">
           {csrf}
           <label>{_("Kanał")}<select name="alerts_channel">
@@ -1841,6 +1867,14 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
                  value="{e(cfg.get('alert_dead_hours', '48'))}" title="{e(_("0 = nie pilnuj"))}"></label>
           <label>{_("Odstęp powtórek [min]")}<input name="alerts_quiet_minutes"
                  value="{e(cfg.get('alerts_quiet_minutes', '30'))}"></label>
+          <div class="full alert-kinds">
+            <label class="check"><input type="checkbox" disabled
+              {' checked' if cfg.get('alert_new_endpoint') == '1' else ''}>
+              {_("Zmiana adresu, z którego łączy się peer")}</label>
+            <label class="check" title="{e(_("Adres peera przeskakuje w kółko między dwoma miejscami - ten sam plik działa na dwóch urządzeniach i wyrzucają się nawzajem."))}">
+              <input type="checkbox" name="{dual.SETTING}" value="1"{' checked' if dual.enabled(cfg) else ''}>
+              {_("Tunel na dwóch urządzeniach naraz")}</label>
+          </div>
           <details class="email-box full">
             <summary>{_("E-mail (opcjonalnie)")}</summary>
             <p class="muted">{_("Dodatkowy kanał obok ntfy albo webhooka. Wysyła przez zwykłą skrzynkę "
@@ -1869,9 +1903,6 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
           </details>
           <button class="primary">{_("Zapisz")}</button>
         </form>
-        <label class="check"><input type="checkbox" disabled
-          {' checked' if cfg.get('alert_new_endpoint') == '1' else ''}>
-          {_("Zmiana adresu, z którego łączy się peer")}</label>
         <form method="post" action="/alerts/test" class="inline">
           {csrf}
           <button>{_("Wyślij testowy alert")}</button>

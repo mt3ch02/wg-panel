@@ -1933,3 +1933,21 @@ EN.update({
     'brak dostępu do katalogu kopii {path} - zainstaluj panel ponownie':
         'no access to the backup directory {path} - reinstall the panel',
 })
+
+# --- ten sam plik na dwoch urzadzeniach ---
+EN.update({
+    'Ten sam plik konfiguracyjny działa na dwóch urządzeniach naraz':
+        'The same config file is active on two devices at once',
+    'Ten sam plik konfiguracyjny działa na dwóch urządzeniach naraz.':
+        'The same config file is active on two devices at once.',
+    '2 urządzenia':
+        '2 devices',
+    '{lead} Od {since} adres przeskakuje między: {endpoints}. Urządzenia wyrzucają się nawzajem, stąd przerwy w połączeniu. Wyłącz tunel na jednym z nich. Jeśli nie wiesz, czyje jest drugie, użyj „Rotacja kluczy” i wyślij nowy plik tylko na właściwe urządzenie. Kto potrzebuje VPN na dwóch urządzeniach, dostaje drugiego peera.':
+        "{lead} Since {since} the address has been switching between: {endpoints}. The devices keep kicking each other off, hence the dropouts. Turn the tunnel off on one of them. If you don't know whose the other one is, use “Key rotation” and send the new file to the right device only. Someone who needs VPN on two devices gets a second peer.",
+    'Adres peera przeskakuje w kółko między dwoma miejscami - ten sam plik działa na dwóch urządzeniach i wyrzucają się nawzajem.':
+        'The peer\'s address keeps switching back and forth between two places - the same file is active on two devices and they keep kicking each other off.',
+    'Tunel na dwóch urządzeniach naraz':
+        'Tunnel on two devices at once',
+    '{alert} przychodzi, gdy ten sam plik działa na dwóch urządzeniach naraz - wyrzucają się wtedy nawzajem i połączenie co chwilę się zrywa.':
+        '{alert} fires when the same file is active on two devices at once - they keep kicking each other off and the connection keeps dropping.',
+})

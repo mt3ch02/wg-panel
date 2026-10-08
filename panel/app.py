@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from panel import i18n  # noqa: E402
 from panel.i18n import _  # noqa: E402
-from panel import (auth, db, export, helperclient, import_conf, model,  # noqa: E402
+from panel import (auth, db, dual, export, helperclient, import_conf, model,  # noqa: E402
                    notify, qr,
                    render, scheduler, simulate, traffic, ui, wgcrypto)
 
@@ -441,6 +441,7 @@ def get_dashboard(req: Request) -> Response:
         can_discard=can_discard,
         discard_enough=discard_enough,
         diff_parts=diff_parts,
+        dual_use=dual.incidents(CONN),
     ))
     total = sum(parts.values())
     if total > 1.0:
@@ -514,6 +515,7 @@ def get_peer(req: Request, peer_id: str) -> Response:
         req.sess, cfg, peer, db.rules_for(CONN, peer["id"]), db.tiers(CONN),
         conf, qr_svg, stat, req.query.get("link", ""), req.query.get("msg", ""),
         alerts=alert_count(CONN), expiry_text=db.describe_expiry(peer),
+        dual_use=dual.incidents(CONN).get(peer["id"]),
         warning=db.expiry_warning(peer, int(cfg.get("expiry_warn_days", "3") or 0)),
         chart=traffic.hourly(CONN, peer["pubkey"], 7),
         route=route, issued=model.issued_state(peer, route),
@@ -1111,6 +1113,7 @@ def post_alerts_settings(req: Request) -> Response:
                    else "starttls")
     # pole wyboru: odznaczone w ogole nie przychodzi w formularzu
     db.set_setting(CONN, "alerts_email", "1" if req.get("alerts_email") == "1" else "0")
+    db.set_setting(CONN, dual.SETTING, "1" if req.get(dual.SETTING) == "1" else "0")
     db.log(CONN, req.actor, "alerts.settings")
     return redirect(with_msg("/alerts", _("Zapisano.")))
 
@@ -2062,9 +2065,18 @@ def main() -> int:
         except helperclient.HelperError:
             return None
 
+    def live_peers():
+        try:
+            return helperclient.call(
+                "peers", {"wg_iface": db.settings(CONN).get("wg_iface", "wg0")},
+                timeout=10).get("peers", {})
+        except helperclient.HelperError:
+            return None
+
     worker = scheduler.Scheduler(
         CONN, lambda: safe_status(CONN),
         log=lambda message: sys.stderr.write(message + "\n"),
+        peers_fn=live_peers,
     )
     worker.drift_fn = drift_now
     worker.dirty_fn = lambda: model.is_dirty(CONN, None, safe_status(CONN, 30)[0])

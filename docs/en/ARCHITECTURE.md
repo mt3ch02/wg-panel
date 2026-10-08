@@ -217,10 +217,13 @@ Panel and helper services have `Restart=always` — systemd brings them up after
 | `dead_peer` | no handshake for longer than the threshold | warning |
 | `expired` | a peer's access ran out and it was suspended | info |
 | `window_open` | a peer's time window opened (in the log) | — |
+| `two_devices` | the same file runs on two devices at once (the address hops A → B → A) | alarm; "stopped" — info |
 | `backup` | a backup failed | alarm |
 | `apply` | an automatic apply failed | alarm |
 
 `new_endpoint` is the most important — it is the first sign that a configuration file leaked. A change of port alone is ignored (normal with NAT); a change of address counts. The same alert doesn't repeat more often than `alerts_quiet_minutes`.
+
+**`two_devices`.** WireGuard has no notion of "one session per key": two devices with the same file kick each other out and the connection keeps dropping. Every 5 s the panel takes a light sample of `wg show dump` (the helper's `peers` operation) and counts events: the peer's address (IP:port) returning to a value from a moment ago, and a handshake sooner than 90 s after the previous one. The alarm fires on at least 3 events within 10 minutes, including at least 2 returns — an ordinary network change (A → B) or switching the tunnel on several times (a new port each time) won't trigger it. The peer list shows a "2 devices" badge and the peer's page describes the addresses. After 10 quiet minutes a "stopped hopping" entry appears (normal priority). While the address keeps hopping, the separate `new_endpoint` alert for that person is muted. Switch: Alerts → Notification settings (`alert_two_devices`, on by default). Ongoing incidents are kept in the `dual_use` table so a panel restart doesn't lose them.
 
 ## Languages
 
@@ -366,7 +369,8 @@ wg-panel/
 | `panel/db.py` | SQLite database: tables, default settings, cleanups after older versions |
 | `panel/model.py` | exactly what goes to the helper on apply |
 | `panel/render.py` | generating `wg0.conf`, firewall rules and client files |
-| `panel/schedule.py`, `scheduler.py` | access deadlines; a background thread: alerts, daily backups, integrity |
+| `panel/schedule.py`, `scheduler.py` | access deadlines; a background thread: a peer-address sample every 5 s, alerts every 30 s, daily backups, integrity |
+| `panel/dual.py` | detecting the same file on two devices at once |
 | `panel/watchdog.py` | the watchdog |
 | `panel/notify.py` | notifications: ntfy, webhook, e-mail |
 | `panel/export.py`, `cryptobox.py` | backups, encryption, NAS, restore |

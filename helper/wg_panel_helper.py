@@ -811,26 +811,44 @@ def op_server_pubkey(payload: dict) -> dict:
     return {"pubkey": result.stdout.strip()}
 
 
+def _wg_dump(iface: str) -> tuple:
+    """`wg show <iface> dump` -> (dziala, port nasluchu, {pubkey: pola peera})."""
+    dump = run(["wg", "show", iface, "dump"])
+    if dump.returncode != 0:
+        return False, "", {}
+    port, peers = "", {}
+    for index, line in enumerate(dump.stdout.strip().split("\n")):
+        fields = line.split("\t")
+        if index == 0:
+            port = fields[2] if len(fields) > 2 else ""
+            continue
+        if len(fields) < 8:
+            continue
+        peers[fields[0]] = {
+            "endpoint": fields[2], "allowed_ips": fields[3],
+            "latest_handshake": int(fields[4] or 0),
+            "rx": int(fields[5] or 0), "tx": int(fields[6] or 0),
+        }
+    return True, port, peers
+
+
+def op_peers(payload: dict) -> dict:
+    """Same adresy i handshake'i - lekka probka co kilka sekund (wykrywanie tego samego pliku
+    na dwoch urzadzeniach). Bez systemctl i sum plikow, w przeciwienstwie do status."""
+    up, _port, peers = _wg_dump(_iface(payload.get("wg_iface", "wg0"), "wg_iface"))
+    return {"up": up, "peers": {key: {"endpoint": value["endpoint"],
+                                      "latest_handshake": value["latest_handshake"]}
+                                for key, value in peers.items()}}
+
+
 def op_status(payload: dict) -> dict:
     cfg = validate_settings(payload["settings"])
     iface = cfg["wg_iface"]
     out: dict = {"iface": iface, "peers": {}, "up": False, "pending": None}
 
-    dump = run(["wg", "show", iface, "dump"])
-    if dump.returncode == 0:
-        out["up"] = True
-        for index, line in enumerate(dump.stdout.strip().split("\n")):
-            fields = line.split("\t")
-            if index == 0:
-                out["listen_port"] = fields[2] if len(fields) > 2 else ""
-                continue
-            if len(fields) < 8:
-                continue
-            out["peers"][fields[0]] = {
-                "endpoint": fields[2], "allowed_ips": fields[3],
-                "latest_handshake": int(fields[4] or 0),
-                "rx": int(fields[5] or 0), "tx": int(fields[6] or 0),
-            }
+    up, port, peers = _wg_dump(iface)
+    if up:
+        out.update(up=True, listen_port=port, peers=peers)
 
     # odcisk plikow na dysku - panel porownuje go z tym, co wygenerowalby teraz,
     # dzieki czemu "niezastosowane zmiany" pokazuje stan faktyczny, a nie zapamietany
@@ -1357,6 +1375,7 @@ def op_tls(payload: dict) -> dict:
 OPS = {
     "ping": op_ping,
     "status": op_status,
+    "peers": op_peers,
     "server_pubkey": op_server_pubkey,
     "preview": op_preview,
     "apply": op_apply,
@@ -1373,6 +1392,9 @@ OPS = {
 # serwer
 # --------------------------------------------------------------------------
 
+QUIET_OPS = {"peers"}
+
+
 class Handler(socketserver.StreamRequestHandler):
     timeout = 120
 
@@ -1388,7 +1410,8 @@ class Handler(socketserver.StreamRequestHandler):
             payload = request.get("payload") or {}
             if not isinstance(payload, dict):
                 raise Rejected("payload musi byc obiektem")
-            log.info("op=%s", op)
+            # szybka probka idzie co 5 s - w dzienniku bylaby szumem (i zapisami na karte)
+            (log.debug if op in QUIET_OPS else log.info)("op=%s", op)
             response = {"ok": True, "result": OPS[op](payload)}
         except Rejected as exc:
             log.warning("odrzucone: %s", exc)

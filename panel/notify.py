@@ -3,6 +3,7 @@
 Zdarzenia, ktore wykrywamy:
   new_endpoint - ten sam klucz laczy sie z nowego adresu; pierwszy sygnal,
                  ze plik konfiguracyjny wyciekl
+  two_devices  - ten sam plik dziala na dwoch urzadzeniach naraz (panel/dual.py)
   dead_peer    - brak handshake'u dluzej niz ustawiony prog
   expired      - peer stracil waznosc i zostal zawieszony
   backup       - kopia zapasowa sie nie powiodla
@@ -50,7 +51,7 @@ def raise_alert(conn: sqlite3.Connection, kind: str, subject: str, message: str,
 
 
 # najpowazniejsze zdarzenia: telefon ma zadzwonic mimo wyciszenia zwyklych powiadomien
-CRITICAL_KINDS = {"new_endpoint", "tamper", "watchdog_wg"}
+CRITICAL_KINDS = {"new_endpoint", "two_devices", "tamper", "watchdog_wg"}
 PRIORITY = {"critical": 5, "alarm": 4, "warn": 3}
 TAGS = {"critical": ["rotating_light"], "alarm": ["rotating_light"], "warn": ["warning"]}
 
@@ -81,7 +82,8 @@ def weak_topic(url: str) -> bool:
 
 def send(cfg: dict, subject: str, message: str, severity: str = "warn", kind: str = "") -> bool:
     """Glowny kanal (ntfy albo webhook) i - jesli wlaczony - e-mail, niezaleznie od siebie."""
-    level = "critical" if kind in CRITICAL_KINDS else severity
+    # "znowu dziala" / "ustalo" tego samego rodzaju to informacja - nie budzi telefonu
+    level = "critical" if kind in CRITICAL_KINDS and severity != "info" else severity
     sent = _send_channel(cfg, subject, message, level)
     if cfg.get("alerts_email") == "1":
         sent = send_email(cfg, subject, message) or sent
@@ -156,8 +158,11 @@ def _send_channel(cfg: dict, subject: str, message: str, level: str) -> bool:
         return False
 
 
-def check_peers(conn: sqlite3.Connection, status: dict) -> None:
-    """Porownuje biezacy stan z ostatnio widzianym i zglasza roznice."""
+def check_peers(conn: sqlite3.Connection, status: dict, skip_endpoint=frozenset()) -> None:
+    """Porownuje biezacy stan z ostatnio widzianym i zglasza roznice.
+
+    skip_endpoint: klucze, ktore przeskakuja miedzy dwoma urzadzeniami (panel/dual.py) - dla
+    nich zamiast alertu o nowym adresie przychodzi jeden, czytelniejszy alert two_devices."""
     cfg = db.settings(conn)
     live = (status or {}).get("peers", {})
     if not live:
@@ -178,7 +183,8 @@ def check_peers(conn: sqlite3.Connection, status: dict) -> None:
         handshake = int(stat.get("latest_handshake") or 0)
         previous = known.get(peer["pubkey"])
 
-        if (watch_endpoint and previous and endpoint and endpoint != "(none)"
+        if (watch_endpoint and peer["pubkey"] not in skip_endpoint
+                and previous and endpoint and endpoint != "(none)"
                 and previous["last_endpoint"] and endpoint != previous["last_endpoint"]):
             old_host = previous["last_endpoint"].rsplit(":", 1)[0]
             new_host = endpoint.rsplit(":", 1)[0]

@@ -29,7 +29,7 @@ Zrobiony pod domową sieć albo małe biuro na Raspberry Pi: kilka osób, jeden 
 | **Split tunnel albo cały ruch** | per tier lub osoba: cały ruch, tylko to, do czego ma dostęp, cały LAN, własna lista |
 | **Dostęp do serwera** | SSH/RDP na Pi tylko dla wskazanych osób, w osobnym łańcuchu |
 | **Kopie zapasowe** | codziennie, lokalnie albo na NAS przez SMB; sumy SHA-256 sprawdzane przez ponowne pobranie; opcjonalne szyfrowanie ChaCha20 + HMAC |
-| **Alerty** | nowy adres znanego klucza (wyciek pliku?), cisza peera, wygaśnięcie, nieudana kopia — ntfy, webhook, e-mail |
+| **Alerty** | nowy adres znanego klucza (wyciek pliku?), ten sam plik używany na dwóch urządzeniach naraz (częsta przyczyna „VPN co chwilę się rozłącza”), cisza peera, wygaśnięcie, nieudana kopia — ntfy, webhook, e-mail |
 | **Strażnik** | niezależny timer systemd: panel, helper, `wg0`, temperatura Pi, zasilanie, dysk, certyfikat |
 | **Kontrola integralności** | wykrywa zmiany konfiguracji zrobione poza panelem |
 | **Historia ruchu** | wykres z 7 dni i wykrywanie anomalii |
@@ -68,7 +68,7 @@ Potem otwórz panel, załóż konto i **sprawdź ustawienia sieci** (podsieć LA
 | czysty system | **B** — nowy klucz serwera, nowy VPN |
 | czysty system oraz kopię panelu i klucz serwera | **C** — odtworzenie; nikt niczego nie zmienia |
 
-Opcje instalatora: `LAN_ACCESS=192.168.1.0/24` (panel dostępny z sieci domowej), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Aktualizacja: `git pull && sudo ./install.sh` z **tymi samymi opcjami co przy instalacji** (instalator ich nie pamięta; bez `LAN_ACCESS` panel wraca do trybu „tylko przez VPN”) — dane zostają. Odinstalowanie: `sudo /opt/wg-panel/uninstall.sh` (VPN działa dalej).
+Opcje instalatora: `LAN_ACCESS=192.168.1.0/24` (panel dostępny z sieci domowej), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Aktualizacja: `git pull && sudo ./install.sh` — dane zostają. Odinstalowanie: `sudo /opt/wg-panel/uninstall.sh` (VPN działa dalej).
 
 ## Jak to działa
 

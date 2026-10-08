@@ -116,6 +116,13 @@ CREATE TABLE IF NOT EXISTS peer_seen (
     updated_at     INTEGER NOT NULL DEFAULT 0
 );
 
+-- trwajace incydenty "ten sam plik na dwoch urzadzeniach" (panel/dual.py)
+CREATE TABLE IF NOT EXISTS dual_use (
+    peer_id   INTEGER PRIMARY KEY REFERENCES peers(id) ON DELETE CASCADE,
+    since     INTEGER NOT NULL,
+    endpoints TEXT NOT NULL DEFAULT '[]'   -- adresy, miedzy ktorymi przeskakuje (JSON)
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     id       INTEGER PRIMARY KEY,
     ts       INTEGER NOT NULL,
@@ -199,6 +206,7 @@ DEFAULT_SETTINGS = {
     "smtp_user": "", "smtp_pass": "", "smtp_from": "", "smtp_to": "",
     "alert_dead_hours": "48",          # 0 = wylaczone
     "alert_new_endpoint": "1",
+    "alert_two_devices": "1",          # ten sam plik na dwoch urzadzeniach naraz
     "alert_expiry": "1",
     "alerts_quiet_minutes": "30",      # nie powtarzaj tego samego alertu czesciej
     # kopie zapasowe
