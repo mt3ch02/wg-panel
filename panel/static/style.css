@@ -306,6 +306,7 @@ button.link.danger:hover { background: none; text-decoration: underline; }
 
 .badge {
   display: inline-block;
+  white-space: nowrap;
   padding: 2px 9px;
   border-radius: 11px;
   font-size: 11.5px;
@@ -381,10 +382,6 @@ form.row.compact { margin-top: 0; }
 form.row.compact label { margin-bottom: 0; }
 form.row.compact button { margin-bottom: 0; }
 
-/* nawigacja na waskim ekranie przewija sie w poziomie */
-@media (max-width: 900px) {
-  nav { overflow-x: auto; white-space: nowrap; }
-}
 
 /* zwijane formularze dodawania */
 .hidden { display: none; }
@@ -499,6 +496,24 @@ button.link.danger:hover { background: var(--danger-soft); }
 form.row > label.fixed { justify-content: flex-start; }
 form.row > label.fixed .lbl { display: flex; align-items: flex-end; min-height: 2.6em; }
 form.row > label.fixed small { min-height: 2.6em; display: block; }
+
+/* ustawienia zaawansowane: ta sama siatka i te same podpisy co pola na wierzchu
+   (blok jest zagniezdzony w formularzu, wiec reguly form.row > label go nie obejmuja) */
+#zaawansowane:not(.hidden) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+#zaawansowane > label { display: flex; flex-direction: column; gap: 6px; min-width: 0;
+                        font-size: 12px; letter-spacing: .02em; color: var(--muted);
+                        text-transform: uppercase; justify-content: flex-start; }
+#zaawansowane > label input, #zaawansowane > label select {
+  width: 100%; font-size: 14px; text-transform: none; letter-spacing: normal; color: var(--ink); }
+#zaawansowane > label small { font-size: 11px; text-transform: none; letter-spacing: normal;
+                              line-height: 1.35; color: var(--muted); }
+#zaawansowane > label.fixed .lbl { display: flex; align-items: flex-end; min-height: 2.6em; }
+#zaawansowane > label.fixed small { min-height: 2.6em; display: block; }
 
 /* checkboxy: znacznik obok tekstu, nie nad nim (siatka ustawia kolumny) */
 form.row > label.check {
@@ -698,7 +713,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 nav .nav-account { display: flex; align-items: center; gap: 10px; }
 .menu-toggle { display: none; }
 
-@media (max-width: 720px) {
+/* menu pod przyciskiem: telefon i tablet - na pasek nie starcza miejsca ponizej ok. 1080 px */
+@media (max-width: 1080px) {
   header { flex-wrap: wrap; height: auto; min-height: 52px; padding: 0 14px; }
   .logo { margin-right: auto; padding: 14px 0; }
   .js .menu-toggle { display: inline-flex; align-items: center; gap: 6px; height: 40px; }
@@ -731,6 +747,9 @@ nav .nav-account { display: flex; align-items: center; gap: 10px; }
   nav .nav-account .who { margin: 0 auto 0 0; }
   nav .nav-account button { height: 40px; line-height: 38px; padding: 0 12px; }
 
+}
+
+@media (max-width: 720px) {
   main { margin-top: 18px; }
 
   .head { flex-wrap: wrap; gap: 10px; }
@@ -809,8 +828,8 @@ nav .nav-account { display: flex; align-items: center; gap: 10px; }
   th a { display: inline-block; padding: 10px 0; }
   .theme-toggle { height: 40px; line-height: 38px; }
 }
-/* szeroki ekran dotykowy (telefon w poziomie, tablet): pasek nawigacji pod palec */
-@media (min-width: 721px) and (pointer: coarse) {
+/* szeroki ekran dotykowy (duzy tablet w poziomie): pasek nawigacji pod palec */
+@media (min-width: 1081px) and (pointer: coarse) {
   .logo { padding: 12px 0; }
   nav a { min-height: 40px; display: inline-flex; align-items: center; }
 }
@@ -882,3 +901,137 @@ td.pick input { width: 18px; height: 18px; margin: 0; }
 
 /* nieaktywny przycisk (np. "Usuń zaznaczone", gdy nic nie zaznaczono) */
 button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* --- kopie ---
+   u gory stan w trzech liniach (rodzaj, harmonogram, ostatnia kopia), pod nim jedna lista
+   kopii z akcjami na zaznaczonych, na dole ustawienia w grupach */
+.card h3.now-title { margin: 18px 0 10px; }
+.dest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.dest-grid form { margin: 0; }
+button.dest { display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+              width: 100%; height: 100%; min-height: 76px; margin: 0; padding: 12px 14px;
+              text-align: left; white-space: normal; line-height: 1.35; }
+button.dest strong { font-size: 15px; color: var(--ink-strong); }
+button.dest span { font-size: 12.5px; color: var(--muted); }
+button.dest:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 720px) {
+  .dest-grid { grid-template-columns: minmax(0, 1fr); }
+  button.dest { min-height: 0; height: auto; }
+}
+.status-list { margin: 2px 0 6px; }
+.status-line { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0;
+               border-top: 1px solid var(--line-soft); }
+.status-line:first-child { border-top: 0; padding-top: 2px; }
+.status-line p { margin: 0; }
+.status-line p.muted { font-size: 13.5px; margin-top: 2px; }
+.status-line .dot { flex: 0 0 10px; width: 10px; height: 10px; margin-top: 7px;
+                    border-radius: 50%; background: var(--muted); }
+.status-line .dot.ok { background: var(--ok); }
+.status-line .dot.warn { background: var(--warn); }
+.status-line .dot.dead { background: var(--danger); }
+details.more { margin-top: 4px; border-top: 1px solid var(--line-soft); }
+details.more form.row { margin-top: 4px; }
+details.more form.row label { max-width: 340px; }
+
+table.backup-list th.pick, table.backup-list td.pick { width: 34px; }
+table.backup-list th.pick input, table.backup-list td.pick input {
+  width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer;
+  vertical-align: middle; }
+table.backup-list td { vertical-align: middle; padding-top: 12px; padding-bottom: 12px; }
+table.backup-list tbody tr[data-ok] { cursor: pointer; }
+table.backup-list tbody tr.picked td { background: var(--accent-soft); }
+table.backup-list td.when { white-space: nowrap; }
+table.backup-list td.kind, table.backup-list td.state { white-space: nowrap; }
+table.backup-list td .badge { margin: 0; vertical-align: middle; }
+table.backup-list .plain { font-size: 13.5px; }
+.scan-line { margin: -4px 0 0; }
+@media (pointer: coarse) {
+  table.backup-list th.pick input, table.backup-list td.pick input { width: 22px; height: 22px; }
+}
+.pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px;
+            padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.pick-bar #pick-count { margin-right: auto; font-size: 13.5px; }
+
+/* ustawienia kopii: po lewej co to jest i po co, po prawej pola - rowne kolumny, bez dziur */
+form.settings { margin-top: 4px; }
+.set-row { display: grid; grid-template-columns: minmax(200px, 5fr) 7fr; gap: 10px 32px;
+           padding: 18px 0; border-top: 1px solid var(--line-soft); }
+.set-row:first-of-type { border-top: 0; padding-top: 4px; }
+.set-info h3 { margin: 0 0 6px; }
+.card .set-info h3:first-of-type { margin-top: 0; }
+.set-info p { margin: 0; font-size: 13px; line-height: 1.5; }
+.set-fields > label, .set-fields .pair > label {
+  display: flex; flex-direction: column; gap: 6px; margin: 0;
+  font-size: 12px; letter-spacing: .02em; color: var(--muted); text-transform: uppercase; }
+.set-fields label input, .set-fields label select { margin: 0; font-size: 14px; text-transform: none;
+  letter-spacing: normal; color: var(--ink); }
+.set-fields > label.check { flex-direction: row; align-items: center; gap: 10px; min-height: 38px;
+  margin-bottom: 12px; font-size: 14px; color: var(--ink); text-transform: none; letter-spacing: normal; }
+.set-fields > label.check input { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; }
+.set-fields .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.set-fields .pair.trio { grid-template-columns: 4fr 3fr 3fr; }
+.set-fields .pair + .pair { margin-top: 14px; }
+.set-actions { display: flex; justify-content: flex-end; padding-top: 16px;
+               border-top: 1px solid var(--line-soft); }
+.set-actions button { margin: 0; }
+@media (max-width: 720px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .set-fields .pair, .set-fields .pair.trio { grid-template-columns: minmax(0, 1fr); }
+}
+.pick-bar button { margin: 0; }
+
+.restore-dialog { width: min(520px, calc(100vw - 32px)); }
+.restore-dialog .key-note { padding: 8px 10px; border-radius: 7px; font-size: 13.5px; }
+.restore-dialog .key-note.ok { background: var(--ok-soft); color: var(--ok); }
+.restore-dialog .key-note.warn { background: var(--warn-soft); color: var(--warn); }
+.restore-dialog label { margin: 14px 0 6px; }
+.restore-dialog label.check { margin: 14px 0 2px; font-size: 14px; }
+.restore-dialog p.small { font-size: 12.5px; margin: 0 0 0 25px; }
+.restore-dialog [hidden] { display: none; }
+/* telefon: wiersz kopii jako karta - kwadracik po lewej przez cala wysokosc */
+@media (max-width: 720px) {
+  /* wiersz kopii jako zwarta karta: data i miejsce u gory, pod spodem dwie plakietki */
+  .js table.backup-list tbody tr { display: grid; align-items: center; column-gap: 12px;
+                                   row-gap: 6px; padding: 12px 0;
+                                   grid-template-columns: 34px auto minmax(0, 1fr); }
+  .js table.backup-list tbody td { padding: 0; min-width: 0; }
+  .js table.stack.backup-list tbody td[data-label]::before { content: none; display: none; }
+  .js table.backup-list tbody td.pick { grid-column: 1; grid-row: 1 / span 2; }
+  .js table.backup-list tbody td.when { grid-column: 2; grid-row: 1; font-weight: 600; }
+  .js table.backup-list tbody td.where { grid-column: 3; grid-row: 1; justify-self: end;
+                                         color: var(--muted); font-size: 13.5px;
+                                         white-space: nowrap; }
+  .js table.backup-list tbody td.kind { grid-column: 2; grid-row: 2; }
+  .js table.backup-list tbody td.state { grid-column: 3; grid-row: 2; justify-self: start; }
+  .js table.backup-list tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
+  .pick-bar #pick-count { flex: 1 1 100%; }
+}
+/* legenda pod lista kopii: dwie krotkie kolumny, oznaczenie i jedno zdanie */
+details.legend .legend-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                              gap: 4px 36px; margin: 4px 0 6px; }
+details.legend h4 { margin: 6px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+                    letter-spacing: .04em; color: var(--muted); }
+details.legend ul { list-style: none; margin: 0; padding: 0; }
+details.legend li { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center;
+                    gap: 12px; padding: 5px 0; font-size: 13.5px; }
+details.legend li .badge { justify-self: start; margin: 0; }
+details.legend li .plain { color: var(--muted); font-size: 13px; }
+details.legend > p.muted { margin: 6px 0 2px; }
+@media (max-width: 900px) {
+  details.legend .legend-cols { grid-template-columns: minmax(0, 1fr); }
+  details.legend li { grid-template-columns: 130px minmax(0, 1fr); }
+}
+
+/* telefon: wykres ruchu w pelnej skali, przewijany w bok (scisniety byl nieczytelny) */
+@media (max-width: 720px) {
+  .chart-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .chart-scroll svg { min-width: 760px; }
+  /* pola o stalej wysokosci podpisu - w jednej kolumnie niepotrzebne dziury */
+  form.row > label.fixed .lbl, form.row > label.fixed small,
+  #zaawansowane > label.fixed .lbl, #zaawansowane > label.fixed small { min-height: 0; }
+}
+td.nowrap, .peers-list td.c-hs, .peers-list td.c-transfer, .nowrap { white-space: nowrap; }
+/* nowsze / starsze pod dluga lista */
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px;
+         margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.pager .button { margin: 0; }

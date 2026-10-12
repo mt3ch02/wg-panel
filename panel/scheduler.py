@@ -12,7 +12,7 @@ import time
 
 import json
 
-from . import dual, schedule, db, export, notify, traffic
+from . import dual, schedule, db, export, i18n, notify, stats, traffic
 
 TICK = 30
 FAST = 5     # probka adresow: przy 30 s drugie urzadzenie umykaloby miedzy probkami
@@ -81,6 +81,7 @@ class Scheduler(threading.Thread):
         if error or not status:
             return
         self.activate_pending(status)
+        stats.update(self.conn, status)      # handshake i ruch - zeby przetrwaly restart Pi
         cfg = db.settings(self.conn)
 
         interval = max(1, int(cfg.get("traffic_sample_minutes", "5") or 5)) * 60
@@ -120,7 +121,7 @@ class Scheduler(threading.Thread):
         if not record["ok"]:
             notify.raise_alert(
                 self.conn, "backup", "kopia zapasowa",
-                f'Kopia zapasowa sie nie powiodla: {record["detail"]}',
+                i18n.pl(i18n.ALERTS["backup_failed"], error=record["detail"]),
                 severity="alarm",
             )
 
@@ -149,7 +150,7 @@ class Scheduler(threading.Thread):
         for finding in findings:
             notify.raise_alert(
                 self.conn, "tamper", finding["kind"],
-                "Konfiguracja zmieniona poza panelem: " + finding["message"],
+                i18n.pl(i18n.ALERTS["tamper"], what=finding["message"]),
                 severity=finding.get("severity", "alarm"),
             )
 

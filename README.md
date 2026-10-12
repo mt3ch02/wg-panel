@@ -1,106 +1,267 @@
 # wg-panel
 
-**[Polski → README.pl.md](README.pl.md)**
+**A web panel and CLI for a home WireGuard server on a Raspberry Pi, built around access rules rather than keys.**
 
-A web panel **and CLI** for WireGuard where **access policy is a first-class citizen**. Most WireGuard panels model a peer: a key and an address. Here the peer is only a carrier — what matters is what it can reach on your LAN, and that is a set of iptables rules generated together with the configuration.
+[Polski / Polish version](README.pl.md)
 
-Built for a home or small-office setup on a Raspberry Pi: a handful of people, one NAS, a few devices, and you want "Marek may open the NAS and nothing else" to actually be true — and provable.
+Most WireGuard UIs manage peers: a key and an address. wg-panel manages what each person can
+reach in your home network. Every peer belongs to a tier (for example "only the NAS on ports
+80/443/445"), can have its own exceptions, and can have an access window. The panel turns all
+of that into `wg0.conf` and iptables rules, shows you the difference before applying it, and
+undoes the change automatically if it cut you off.
 
-![Peer list with traffic chart](docs/screenshots/en-peers.png)
+- Pure Python 3.9+ standard library. No pip packages, no Node, no build step, no CDN.
+- Uses the `wg` and `iptables` tools that are already on the Pi. QR codes are generated in pure Python.
+- The web process never runs as root. A small helper does, and accepts only a fixed list of operations.
+- Polish and English interface, dark and light theme, works on a phone.
 
-- **No pip dependencies.** Plain Python 3.9+ standard library.
-- **No build step.** No Node, no bundler, no CDNs.
-- Uses `wg` and `iptables`, which are already on the machine. Draws QR codes itself, in pure Python.
-- Panel in **English and Polish** (follows your browser's language, switchable); installer in both too.
+![Peer list](docs/screenshots/en-peers.png)
 
-> ⚠ **Read before you use it.** wg-panel writes your firewall rules and `wg0.conf`, and part of it runs as root. It has a defence-in-depth design (see [Security](#security)), but it has **not had an independent security audit**. Keep it off the public internet, follow the [install guide](docs/en/INSTALL.md), and take the snapshots it asks for.
+<table>
+  <tr>
+    <td><img src="docs/screenshots/en-peer.png" alt="Peer page" width="420"></td>
+    <td><img src="docs/screenshots/en-backups.png" alt="Backups" width="420"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/en-simulator.png" alt="Rule simulator" width="420"></td>
+    <td align="center"><img src="docs/screenshots/en-mobile.png" alt="Phone view" width="190"></td>
+  </tr>
+</table>
 
 ## Features
 
 | | |
 |---|---|
-| **Tiers** | a named rule set; changing a tier switches everyone assigned to it at once |
-| **Per-peer rules** | host, port, range, time window (`-m time`), ACCEPT/DROP; checked before the tier's rules |
-| **Rule simulator** | "can this peer reach that host on that port, and which rule decides?" — before you apply anything |
-| **Safety fuse** | apply with an automatic rollback if you don't confirm — a rule that cuts you off heals itself |
-| **Diff preview** | see what will change before applying |
-| **Access windows** | unlimited, a from–to window, or N days from first use; works even when the panel is down |
-| **Host catalog** | `nas`, `printer` instead of addresses in rules; change an IP in one place |
-| **Split tunnel or full** | per tier or per person: all traffic, only what they can reach, whole LAN, or a custom list |
-| **Server access control** | SSH/RDP to the Pi only for chosen peers, in a separate chain |
-| **Backups** | daily, local or to a NAS over SMB; SHA-256 checksums verified by re-downloading; optional ChaCha20 + HMAC encryption |
-| **Alerts** | new address for a known key (leaked config?), the same file used on two devices at once (the cause of "the VPN keeps dropping"), silent peer, expiry, failed backup — via ntfy, webhook or e-mail |
-| **Watchdog** | independent systemd timer: panel, helper, `wg0`, Pi temperature, power, disk, certificate |
-| **Integrity check** | detects config changes made outside the panel |
-| **Traffic history** | 7-day chart and anomaly detection |
-| **HTTPS** | own name-constrained CA (or your certificate); reverse-proxy friendly |
-| **One-time links, key wipe** | hand out a config without keeping the private key on the server |
-| **IPv6** | optional; rules generated for both families |
-| **Phone-friendly** | usable from 320 px; dark theme by default |
-| **`wgctl`** | everything the panel does, from a terminal |
-
-<p>
-<img src="docs/screenshots/en-simulator-drop.png" width="49%" alt="Rule simulator showing which rule blocks a connection">
-<img src="docs/screenshots/en-tiers.png" width="49%" alt="Tiers and their rules">
-</p>
+| **Tiers** | Named rule sets. Change a tier and everyone in it changes at once. Three are created on first install: ADMIN (everything), NET (internet only, LAN blocked), NAS (only the NAS). |
+| **Per-peer rules** | Host, port, range, time window, ACCEPT or DROP. Checked before the tier rules, so an exception works despite a tier-wide block. |
+| **Access to the Pi itself** | A separate chain on `INPUT`, so SSH or RDP to the Pi is only open to the peers you choose. |
+| **Access windows** | No expiry, a fixed window (from–to), or N days from the first connection, which suits guests who get a QR code today and use it next week. |
+| **Host catalogue** | Write `nas` or `printer` in rules instead of IP addresses; change the address in one place. |
+| **What goes through the VPN** | `AllowedIPs` in each client file is computed from what the person can actually reach (full tunnel or split tunnel). |
+| **Safe apply** | You see a diff before applying. If the change isn't confirmed within 90 s, it rolls back by itself. The browser confirms automatically when it can still reach the panel. |
+| **Rule simulator** | "Will this peer reach this host on this port, and which rule decides?" Works before you apply. |
+| **Alerts** | Same key from a new IP address, the same file used on two devices at once, a silent peer, expiry, a failed backup, a configuration changed outside the panel. Sent via ntfy, webhook or e-mail. |
+| **Guard** | A systemd timer outside the panel process checks the panel, the helper, `wg0`, temperature, disk space, undervoltage and the certificate, and enforces access expiry even when the panel is down. |
+| **Integrity check** | Detects hand edits to `wg0.conf`, rules added to the panel's chains, keys added with `wg set`, and rules inserted in front of the panel's chain. |
+| **Backups** | Daily, to a NAS (SMB share), to the Pi, or downloaded to your computer. A full backup is encrypted and contains the server key, so you can rebuild the whole Pi from it with one command. |
+| **HTTPS** | The panel's own certificate authority, limited by X.509 name constraints to your home network, the VPN and the Pi's name. Your own certificate (for example Let's Encrypt) also works. |
+| **Traffic history** | Hourly chart for 7 days, total and per peer, with anomaly detection. |
+| **IPv6** | Optional. Rules apply to both address families. |
+| **One-time links, key deletion** | Hand over a configuration without sending the file around, then delete the private key from the server. |
+| **`wgctl`** | Everything the panel does, from the terminal. Same database, same helper. |
+| **Audit log** | Who changed what and when. The log and the alerts each have their own retention (90 days by default, 0 = keep everything). |
 
 ## Requirements
 
-- Raspberry Pi OS / Debian / Ubuntu with **systemd**, root access
-- `wireguard` (`wg`, `wg-quick`), `iptables`, Python **3.9+**, `openssl`
-- optional: `smbclient` (backups to a NAS — the installer offers to install it), `ufw`
-- The Pi should sit behind a router with a **DHCP reservation** and the WireGuard UDP port forwarded
+- Raspberry Pi OS or Debian 12 (another Debian-based system with systemd should work too).
+- Python 3.9 or newer (already on Raspberry Pi OS).
+- Root access. The installer adds `wireguard-tools`, `iptables` and `smbclient` if they are missing.
+- A UDP port forwarded from your router to the Pi (51820 by default) and a public address or DDNS name.
+- `ufw` is optional. When present, the installer adds a rule that opens the panel's port only on `wg0` (and on your LAN if you ask for it).
 
 ## Quick start
 
+Copy the project to the Pi and run the installer:
+
 ```bash
-sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git
 cd wg-panel
-sudo ./install.sh                      # add INSTALL_LANG=pl for Polish installer messages
+sudo LAN_ACCESS=192.168.1.0/24 ./install.sh
 ```
 
-Then open the panel, create an account, and **check the network settings** (LAN subnet, Pi address, NAS address, endpoint) — the defaults assume a typical home network (`192.168.1.0/24`). The [install guide](docs/en/INSTALL.md) covers three paths:
+`LAN_ACCESS` makes the panel reachable from your home network. Use your own network's address.
+Without it, the panel listens only on the VPN address `10.0.0.1` and on the Pi itself
+(reach it with `ssh -L 8080:127.0.0.1:8080 pi@<pi-address>` and then `http://localhost:8080`).
 
-| You have | Path |
-|---|---|
-| a WireGuard server already running on the Pi | **A** — the panel takes it over; clients change nothing |
-| a clean system | **B** — new server key, new VPN |
-| a clean system and a panel backup + your server key | **C** — restore; nobody changes anything |
+A step-by-step guide covering all three cases — taking over an existing WireGuard, a clean install and a
+restore onto a new Pi — is in [docs/en/INSTALL.md](docs/en/INSTALL.md).
 
-Installer options: `LAN_ACCESS=192.168.1.0/24` (open the panel to your home network), `BIND_HOST`, `BIND_PORT`, `TLS=0`, `INSTALL_LANG=pl`. Update with `git pull && sudo ./install.sh` — your data stays. Remove with `sudo /opt/wg-panel/uninstall.sh` (the VPN keeps running).
+What the installer does on a clean system:
 
-## How it works
+1. Asks about the server key: paste an existing one, or generate a new one.
+2. Detects your home network, the Pi's LAN address and the WAN interface, and suggests the NAS address.
+3. Creates the `wg-panel` service account, the services and the certificate authority, and adds your account to the `wg-panel` group so `wgctl` works without `sudo`.
+4. Prints the panel address, the certificate fingerprint and the next steps.
 
+Then:
+
+1. Open `https://<pi-address>:8080` and create the administrator account (password of at least 10 characters).
+   The browser will warn about the certificate until you install the panel's CA. The `/tls` page has the file and instructions for iPhone, Android, Windows and macOS.
+2. Switch to English with the **PL / EN** switch next to the theme button.
+3. In **Settings**, set **Client endpoint** to your DDNS name or public IP with the port (for example `vpn.example.org:51820`) and check the detected addresses.
+4. In **Hosts**, check the address suggested for `nas`. The NAS tier uses it.
+5. Add people in **Peers**, then **Apply changes**. The first apply brings the tunnel up.
+6. Put yourself in the ADMIN tier. Over the VPN, the panel opens only for tiers that list its port under **Ports on the Pi itself**, and by default that's only ADMIN (`22,3389,8080`).
+
+## Updating
+
+Get the new version and run the installer again:
+
+```bash
+cd wg-panel
+git pull
+sudo ./install.sh
 ```
-browser            wgctl (terminal)
-   |                    |
-   v                    v
-   +--- SQLite: source of truth ---+
-                |   unix socket, allow-list of operations
-                v
-      helper (root)  ->  wg0.conf + WG-USERS / WG-USERS-HOST chains
+
+An update replaces only the program. Everything you set up stays:
+
+- **Your data** (peers, tiers, rules, hosts, accounts, settings, history) lives in `/var/lib/wg-panel/panel.db`, separate from the code in `/opt/wg-panel`. New settings are added with their defaults; your values are never overwritten.
+- **Install options** (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) are remembered in `/etc/wg-panel/install.conf`. You don't repeat them. To change one, pass it again; an empty value (`LAN_ACCESS=`) turns LAN access off. Installs made before this file existed read the options from the installed service and the ufw rule.
+- **A snapshot of the database** is taken before the new code starts. It appears in **Backups** as "before update" and can be restored like any other backup.
+- **Built-in tiers and the `nas` host** are created only on the very first install. If you renamed or deleted them, an update doesn't bring them back.
+- **The server key, certificates and client files** are not touched. Nobody needs a new file.
+
+If the peer list shows "The panel has changes that are not on the interface" after an update,
+click **Apply changes**. That happens when a new version generates the files slightly differently.
+
+## Taking over an existing WireGuard
+
+If `/etc/wireguard/wg0.conf` already exists and wasn't made by the panel, the installer treats
+it as a takeover:
+
+1. It saves the current state (`wg0.conf`, `iptables-save`, `ufw status`) to `/root/wg-panel-before/`. That is your way back (`uninstall.sh --restore`).
+2. It installs the panel without touching the running tunnel.
+3. You import the peers, first as a dry run:
+
+```bash
+cd /opt/wg-panel
+sudo cat /etc/wireguard/wg0.conf | sudo -u wg-panel \
+     WGPANEL_DB=/var/lib/wg-panel/panel.db python3 -m panel.import_conf - --tier NAS --dry-run
+# looks right? run it again without --dry-run
 ```
 
-The web process has no root. It never sends commands — only a data model — and the small helper validates it again and renders the files itself. The server's private key never enters the database. The VPN keeps working if the panel is down. Details: [docs/en/ARCHITECTURE.md](docs/en/ARCHITECTURE.md).
+4. In the panel, give people names and tiers, check them in the **Simulator**, look at the diff and **Apply changes**.
 
-## Security
+The first apply overwrites `wg0.conf` with the generated version. Imported peers keep working
+with their existing files. The panel doesn't have their private keys (`wg0.conf` never contains
+them), so to issue a new file for someone you do a **key rotation**.
 
-Process separation, an allow-list helper, validation on both sides, no shell anywhere, scrypt + login lockout + optional TOTP, CSRF tokens, `HttpOnly`/`SameSite=Strict` cookies, systemd hardening, encrypted backups, and an alert when a key shows up from a new address. The full table and what the panel does **not** protect against (root on the Pi, a stolen SD card) is in the architecture doc. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+## Restoring onto a new Pi
 
+With a **full** backup on your NAS, a clean system becomes the old Pi with one command:
 
-## Known limitations
+```bash
+sudo ./install.sh --restore
+```
 
-- Defaults assume a typical home network (LAN `192.168.1.0/24`, NAS `192.168.1.11`, Pi `192.168.1.10`, WireGuard port `51820`). Check them in Settings before the first apply.
-- `wgctl`, notification text and code comments are currently **in Polish**. The panel and installer are bilingual. Translations and PRs welcome.
-- Tested on Raspberry Pi OS (Debian) only.
+The installer asks for the NAS share and the backup password, lists the backups, checks the
+checksum, restores the server key, the certificate authority and the database, and brings the
+tunnel up. Everyone keeps connecting with their existing files, and devices keep trusting the
+panel's certificate.
 
-## Documentation
+From a basic backup (no server key), the installer asks whether to paste the old key or generate
+a new one. With a new key, everyone needs a new file.
 
-| | English | Polski |
+## Install options
+
+Pass them as environment variables on the first install. Updates reuse the saved values.
+
+| Option | Default | Meaning |
 |---|---|---|
-| Install & operate | [docs/en/INSTALL.md](docs/en/INSTALL.md) | [docs/pl/INSTALACJA.md](docs/pl/INSTALACJA.md) |
-| Architecture | [docs/en/ARCHITECTURE.md](docs/en/ARCHITECTURE.md) | [docs/pl/ARCHITEKTURA.md](docs/pl/ARCHITEKTURA.md) |
+| `LAN_ACCESS` | empty | Network allowed to open the panel besides the VPN, for example `192.168.1.0/24`. |
+| `BIND_PORT` | `8080` | Panel port (HTTPS and HTTP on the same port; plain HTTP from the network is redirected). |
+| `TLS` | `1` | `0` turns HTTPS off. |
+| `INSTALL_LANG` | `en` | `pl` for Polish installer messages. |
+| `SERVER_KEY` | ask | `paste` (key on standard input) or `new`, for installs without a terminal. |
+
+## Backups
+
+The **Backups** page has three parts: the current state, **Back up now – where?**
+(NAS / this Pi / this computer) and one list of all backups with actions on the selected
+ones (check checksum, restore, delete). Settings are at the bottom.
+
+| | Basic (no backup password) | Full (with a password, encrypted) |
+|---|---|---|
+| Settings, tiers, peers, rules, hosts, accounts | ✓ | ✓ |
+| Passwords for the NAS, ntfy and e-mail | | ✓ |
+| History: traffic, handshakes, audit log, alerts | | ✓ |
+| Server private key and HTTPS certificate authority | | ✓ |
+
+- **Where a backup goes** is your choice: NAS only (the file exists on the Pi only while it's being sent), the Pi only, or both.
+- **Checksums.** Every backup gets a SHA-256 stored in the database and in a `.sha256` file. Right after saving, the panel downloads the backup from where it actually lives and checks it; each daily backup also re-checks the three previous ones.
+- **Encryption:** scrypt → ChaCha20 (RFC 8439) + HMAC-SHA256, implemented in the standard library and tested against the RFC vectors. Keep the backup password in a password manager.
+- **The NAS isn't polled in the background.** The list asks the NAS only when you click **Refresh list from NAS**, so a sleeping NAS stays asleep.
+- A basic backup contains the pre-shared keys of all peers in plain text. The panel shows a red dot when that is the case.
+
+## Security model
+
+```
+browser                 wgctl (terminal)
+   |  HTTPS (wg0, LAN)      |
+   v                        v
+   +---- SQLite: source of truth ----+
+                  |
+                  |  unix socket, JSON, fixed list of operations
+                  v
+       helper/wg_panel_helper.py   (root)
+                  |
+                  v
+  /etc/wireguard/wg0.conf  +  WG-USERS / WG-USERS-HOST chains
+```
+
+- **The panel never sends commands or ready-made file contents.** It sends a data model. The helper validates it again and renders the files itself, so a compromised web process can't make the helper do anything it wasn't written to do.
+- **The server private key never enters the database or the panel.** The helper reads it from disk when rendering.
+- **Never expose the panel to the internet.** It listens on the VPN address (and your LAN if you choose). From the VPN, only tiers that list the panel's port under **Ports on the Pi itself** can open it.
+- **No independent security audit.** The design is defence in depth, but nobody outside the project has reviewed it. Keep the panel off the internet and take the snapshots the guide asks for.
+- Logins are rate-limited (5 attempts per 5 minutes per address). Passwords use scrypt, and TOTP is optional. Every POST carries a CSRF token. Cookies are HttpOnly and SameSite=Strict, and the systemd units are hardened.
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
+## Command line
+
+```bash
+wgctl status                                   # tunnel state, unapplied changes
+wgctl list                                     # peers with handshake and expiry
+wgctl add Anna --tier NAS --device laptop
+wgctl add Guest --tier NET --days 7            # 7 days from the first connection
+wgctl qr Anna                                  # QR code in the terminal
+wgctl rule add Anna --accept printer --proto tcp --port 631
+wgctl check Anna 192.168.1.10 445 -v           # simulate, exit code 0 = ACCEPT, 2 = DROP
+wgctl diff && wgctl apply                      # then: wgctl confirm
+wgctl backup --target smb                      # smb / local / both
+```
+
+`wgctl --help` lists everything.
+
+## Uninstalling
+
+```bash
+sudo /opt/wg-panel/uninstall.sh            # removes the panel; the VPN keeps running, data stays
+sudo /opt/wg-panel/uninstall.sh --purge    # also removes data, the service account and saved options
+sudo /opt/wg-panel/uninstall.sh --restore  # --purge and back to the pre-panel configuration
+```
+
+The server key, the `wg-quick@wg0` service and your backups on the NAS are never touched.
+
+## Languages and known limitations
+
+- The web interface is fully Polish and English. The choice is per browser.
+- Push and e-mail notification text and `wgctl` output are in Polish. The documentation is in English and Polish.
+- Designed for one WireGuard interface (`wg0`) on one Pi, for a household or a small office.
+
+## Development
+
+There is no build step. Each test file sets up its own temporary database and replaces `wg`,
+`iptables` and `systemctl` with stubs, so the tests don't touch the network:
+
+```bash
+for t in tests/selftest.py tests/test_*.py; do python3 "$t" || break; done
+```
+
+`tests/test_permissions.py` needs root (it switches to other user IDs) and skips itself otherwise.
+How the panel works inside (rule order, the safe apply, integrity checks, HTTPS, backups, every
+module) is described in [docs/en/ARCHITECTURE.md](docs/en/ARCHITECTURE.md) ([po polsku](docs/pl/ARCHITEKTURA.md)).
+
+```
+panel/        web application (HTTP server, views, rules, backups, scheduler)
+helper/       the only component running as root
+wgctl         command-line interface
+systemd/      service units and the guard timer
+install.sh    install, update and --restore
+uninstall.sh  three levels of removal
+tests/        tests (not installed on the Pi)
+docs/         install guides and technical documentation (en, pl), screenshots
+```
 
 ## License
 

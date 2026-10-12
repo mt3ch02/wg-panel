@@ -116,6 +116,20 @@ CREATE TABLE IF NOT EXISTS peer_seen (
     updated_at     INTEGER NOT NULL DEFAULT 0
 );
 
+-- ostatni handshake i laczny ruch - przetrwaja restart Pi (panel/stats.py)
+CREATE TABLE IF NOT EXISTS peer_stats (
+    peer_id        INTEGER PRIMARY KEY REFERENCES peers(id) ON DELETE CASCADE,
+    pubkey         TEXT NOT NULL DEFAULT '',    -- klucz, ktorego dotycza last_rx/last_tx
+    boot_id        TEXT NOT NULL DEFAULT '',    -- uruchomienie Pi, z ktorego sa liczniki
+    last_rx        INTEGER NOT NULL DEFAULT 0,  -- ostatnio widziane liczniki jadra
+    last_tx        INTEGER NOT NULL DEFAULT 0,
+    rx_total       INTEGER NOT NULL DEFAULT 0,  -- suma od "since", tez sprzed restartow
+    tx_total       INTEGER NOT NULL DEFAULT 0,
+    last_handshake INTEGER NOT NULL DEFAULT 0,
+    since          INTEGER NOT NULL DEFAULT 0,  -- od kiedy liczymy
+    dead_alerted   INTEGER NOT NULL DEFAULT 0   -- handshake, po ktorym poszedl alert o ciszy
+);
+
 -- trwajace incydenty "ten sam plik na dwoch urzadzeniach" (panel/dual.py)
 CREATE TABLE IF NOT EXISTS dual_use (
     peer_id   INTEGER PRIMARY KEY REFERENCES peers(id) ON DELETE CASCADE,
@@ -178,12 +192,12 @@ CREATE TABLE IF NOT EXISTS config_versions (
 SEED_NAS = "192.168.1.11"
 
 DEFAULT_SETTINGS = {
-    "lan": "192.168.1.0/24",
+    "lan": "192.168.1.0/24",           # instalator wpisuje siec wykryta na Pi
     "vpn": "10.0.0.0/24",
     "server_ip": "10.0.0.1",
     "wan_if": "eth0",
     "listen_port": "51820",
-    "endpoint": "vpn.example.com:51820",
+    "endpoint": "vpn.example.com:51820",  # DDNS albo publiczny IP - do zmiany w Ustawieniach
     "dns_full": "9.9.9.9",            # Quad9 - filtruje domeny zlosliwe, nie profiluje
     "wg_iface": "wg0",
     "chain": "WG-USERS",
@@ -211,12 +225,12 @@ DEFAULT_SETTINGS = {
     "alerts_quiet_minutes": "30",      # nie powtarzaj tego samego alertu czesciej
     # kopie zapasowe
     "backup_enabled": "0",
-    "backup_target": "local",          # local | smb
+    "backup_target": "local",          # local | smb | both (export.TARGETS)
     "backup_dir": "/var/lib/wg-panel/backups",
     "backup_time": "03:30",
     "backup_keep": "14",
     "backup_passphrase": "",
-    "smb_host": "192.168.1.11",
+    "smb_host": "",
     "smb_share": "backup",
     "smb_path": "wg-panel",
     "smb_user": "",
@@ -237,10 +251,11 @@ DEFAULT_SETTINGS = {
     "traffic_anomaly_min_mb": "500",   # ...i co najmniej tyle MB
     # integralnosc
     "drift_check": "1",
-    # ile dni trzymac dziennik i alerty
-    "audit_days": "7",
+    # ile dni trzymac dziennik i alerty - osobno; 0 = bez limitu (nic nie jest kasowane)
+    "audit_days": "90",
+    "alerts_days": "90",
     "mtu": "",
-    "server_lan": "192.168.1.10",     # adres Pi w sieci domowej
+    "server_lan": "192.168.1.10",      # adres Pi w sieci domowej (instalator wpisuje wykryty)
     "panel_port": "8080",              # port panelu; z VPN tylko dla wskazanych osob
 }
 
@@ -431,19 +446,30 @@ def normalize_legacy(conn: sqlite3.Connection) -> list[str]:
 
 
 def _init_defaults(conn: sqlite3.Connection) -> None:
+    """Ustawienia domyslne tylko tam, gdzie ich nie ma - Twoich wartosci nic nie nadpisuje,
+    takze gdy nowa wersja ma inne wartosci domyslne. Tiery wbudowane powstaja raz, na pustej
+    bazie: skasowany tier nie wraca po restarcie ani po aktualizacji."""
     with conn:
+        # alerty mialy wspolny limit z dziennikiem (audit_days) - po rozdzieleniu zostaje
+        # ta sama liczba dni, zeby aktualizacja nie zmienila tego, jak dlugo leza alerty
+        conn.execute("INSERT OR IGNORE INTO settings(key, value) "
+                     "SELECT 'alerts_days', value FROM settings WHERE key = 'audit_days'")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value)
             )
-        for tier in BUILTIN_TIERS:
-            conn.execute(
-                """INSERT OR IGNORE INTO tiers(name, description, client_mode, host_access,
-                                               rules_json, builtin)
-                   VALUES (?, ?, ?, ?, ?, 1)""",
-                (tier["name"], tier["description"], tier["client_mode"],
-                 tier["host_access"], json.dumps(tier["rules"])),
-            )
+        seeded = conn.execute("SELECT 1 FROM settings WHERE key = 'tiers_seeded'").fetchone()
+        if not seeded:
+            if not conn.execute("SELECT 1 FROM tiers LIMIT 1").fetchone():
+                for tier in BUILTIN_TIERS:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO tiers(name, description, client_mode,
+                                                       host_access, rules_json, builtin)
+                           VALUES (?, ?, ?, ?, ?, 1)""",
+                        (tier["name"], tier["description"], tier["client_mode"],
+                         tier["host_access"], json.dumps(tier["rules"])),
+                    )
+            conn.execute("INSERT INTO settings(key, value) VALUES ('tiers_seeded', '1')")
 
 
 # --- ustawienia ---
@@ -536,28 +562,55 @@ def shrink_runtime_settings(conn: sqlite3.Connection) -> int:
     return 0
 
 
+RETENTION_MAX = 36500   # 100 lat - wiecej nie ma sensu, a chroni przed literowka
+
+
+def retention_days(cfg: dict, key: str) -> int:
+    """Ile dni trzymac dziennik (audit_days) albo alerty (alerts_days); 0 = bez limitu.
+    Zla wartosc w bazie (np. wpisana recznie) nie psuje strony ani harmonogramu -
+    wtedy obowiazuje domyslna."""
+    value = str(cfg.get(key, "")).strip()
+    if value.isdigit() and int(value) <= RETENTION_MAX:
+        return int(value)
+    return int(DEFAULT_SETTINGS[key])
+
+
 def prune_history(conn: sqlite3.Connection, now: float | None = None) -> tuple[int, int]:
-    """Kasuje wpisy dziennika i alerty starsze niz audit_days."""
+    """Kasuje wpisy dziennika starsze niz audit_days i alerty starsze niz alerts_days.
+    0 = bez limitu - wtedy ta czesc historii zostaje cala."""
     import time as _t
-    days = int(settings(conn).get("audit_days", "7") or 0)
-    if days <= 0:
-        return 0, 0
-    cutoff = int(now if now is not None else _t.time()) - days * 86400
+    cfg = settings(conn)
+    moment = int(now if now is not None else _t.time())
+    removed = []
     with conn:
-        audit = conn.execute("DELETE FROM audit WHERE ts < ?", (cutoff,)).rowcount
-        alerts = conn.execute("DELETE FROM alerts WHERE ts < ?", (cutoff,)).rowcount
-    return audit, alerts
+        for table, key in (("audit", "audit_days"), ("alerts", "alerts_days")):
+            days = retention_days(cfg, key)
+            if days <= 0:
+                removed.append(0)
+                continue
+            removed.append(conn.execute(f"DELETE FROM {table} WHERE ts < ?",
+                                        (moment - days * 86400,)).rowcount)
+    return removed[0], removed[1]
 
 
 def audit_tail(conn: sqlite3.Connection, limit: int = 100,
-               newest_first: bool = True) -> list[sqlite3.Row]:
+               newest_first: bool = True, offset: int = 0) -> list[sqlite3.Row]:
     order = "DESC" if newest_first else "ASC"
     return list(conn.execute(
-        f"SELECT * FROM audit ORDER BY id {order} LIMIT ?", (limit,)))
+        f"SELECT * FROM audit ORDER BY id {order} LIMIT ? OFFSET ?", (limit, offset)))
 
 
-def alerts_tail(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
-    return list(conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)))
+def audit_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+
+
+def alerts_tail(conn: sqlite3.Connection, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
+    return list(conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ? OFFSET ?",
+                             (limit, offset)))
+
+
+def alerts_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
 
 
 def unseen_alerts(conn: sqlite3.Connection) -> int:
@@ -605,6 +658,19 @@ def backups_tail(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]
     return list(conn.execute("SELECT * FROM backups ORDER BY id DESC LIMIT ?", (limit,)))
 
 
+def backups_list(conn: sqlite3.Connection, limit: int | None = None) -> list[sqlite3.Row]:
+    """Kopie od najnowszej - wedlug czasu kopii, nie kolejnosci dopisania (kopie znalezione
+    na NAS dopisuja sie pozniej, a bywaja starsze)."""
+    sql = "SELECT * FROM backups ORDER BY ts DESC, id DESC"
+    if limit:
+        return list(conn.execute(sql + " LIMIT ?", (limit,)))
+    return list(conn.execute(sql))
+
+
+def backups_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM backups").fetchone()[0]
+
+
 
 def hosts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute("SELECT * FROM hosts ORDER BY name COLLATE NOCASE"))
@@ -633,11 +699,14 @@ def render_cfg(conn: sqlite3.Connection) -> dict:
 def seed_hosts(conn: sqlite3.Connection) -> None:
     """Katalog dostaje NAS i samo Pi z ustawien - jednorazowo, potem to Twoj katalog."""
     cfg = settings(conn)
-    if not conn.execute("SELECT COUNT(*) AS n FROM hosts").fetchone()["n"]:
-        with conn:
-            conn.execute(
-                "INSERT INTO hosts(name, address, description) VALUES ('nas', ?, ?)",
-                (cfg.get("nas") or SEED_NAS, "NAS - utworzony automatycznie z ustawien"))
+    if cfg.get("seeded_nas") != "1":
+        # raz: na pustym katalogu - skasowany "nas" nie wraca po restarcie
+        if not conn.execute("SELECT COUNT(*) AS n FROM hosts").fetchone()["n"]:
+            with conn:
+                conn.execute(
+                    "INSERT INTO hosts(name, address, description) VALUES ('nas', ?, ?)",
+                    (cfg.get("nas") or SEED_NAS, "NAS - utworzony automatycznie z ustawien"))
+        set_setting(conn, "seeded_nas", "1")
     if cfg.get("seeded_pi") != "1" and cfg.get("server_lan"):
         with conn:
             conn.execute(

@@ -9,8 +9,19 @@ from __future__ import annotations
 import ipaddress
 import time as _time
 
-from . import render
+from . import i18n, render
 from .i18n import _
+
+
+def _comment(text: str) -> str:
+    """Komentarz wbudowanej reguly po tlumaczeniu. Regula dociera tu juz oczyszczona dla
+    iptables (np. bez '+'), wiec tekst wbudowany rozpoznajemy po oczyszczonej postaci."""
+    from .db import BUILTIN_TIERS
+    for tier in BUILTIN_TIERS:
+        for rule in tier["rules"]:
+            if render.clean_comment(rule["comment"]) == text:
+                return i18n.maybe(rule["comment"])
+    return i18n.maybe(text)
 
 WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -50,7 +61,7 @@ def _describe(rule: dict) -> str:
     if rule["weekdays"]:
         parts.append(",".join(rule["weekdays"]))
     if rule["comment"]:
-        parts.append(f'({rule["comment"]})')
+        parts.append(f'({_comment(rule["comment"])})')
     return " ".join(parts)
 
 

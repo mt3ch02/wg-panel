@@ -17,7 +17,7 @@ import os
 import sqlite3
 import time
 
-from . import db, export, helperclient, model, notify
+from . import db, export, helperclient, i18n, model, notify
 
 
 def update_states(conn: sqlite3.Connection, now: int | None = None) -> list:
@@ -37,7 +37,7 @@ def update_states(conn: sqlite3.Connection, now: int | None = None) -> list:
         if cfg.get("alert_expiry", "1") == "1":
             notify.raise_alert(
                 conn, "expired", peer["name"],
-                f'{peer["name"]} ({peer["ip"]}) stracil waznosc i zostal zawieszony.',
+                i18n.pl(i18n.ALERTS["expired"], name=peer["name"], ip=peer["ip"]),
                 severity="info")
     # start okna: wlaczamy tylko to, co sami wczesniej wylaczylismy albo co zostalo
     # zalozone z data startu w przyszlosci
@@ -176,7 +176,7 @@ def run(conn: sqlite3.Connection, call=helperclient.call, status: dict | None = 
                 result["error"] = str(exc)
                 notify.raise_alert(
                     conn, "apply", "automatyczne zastosowanie",
-                    f"Okna dostepu sie zmienily, ale nie udalo sie zastosowac zmian: {exc}",
+                    i18n.pl(i18n.ALERTS["apply_failed"], error=exc),
                     severity="alarm")
         return result
 

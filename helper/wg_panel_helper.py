@@ -351,6 +351,9 @@ def render_rules_file(cfg: dict, peers: list[dict], family: int = 4) -> str:
     return "\n".join(lines) + "\n"
 
 
+DOCKER_CHAIN = "DOCKER-USER"  # lancuch Dockera na reguly uzytkownika
+
+
 def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquerade: bool):
     chain, host_chain, iface, wan = cfg["chain"], cfg["host_chain"], cfg["wg_iface"], \
         cfg["wan_if"]
@@ -359,6 +362,11 @@ def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquera
         f"PostUp = {tool} -N {host_chain} 2>/dev/null; {tool} -F {host_chain}",
         f"PostUp = {tool} -C FORWARD -i {iface} -j {chain} 2>/dev/null || "
         f"{tool} -I FORWARD 1 -i {iface} -j {chain}",
+        # Docker przy starcie wstawia swoje skoki na sama gore FORWARD; DOCKER-USER to lancuch,
+        # ktory Docker przepuszcza pierwszy i ktorego nie czysci - tam nasz skok zostaje pierwszy
+        f"PostUp = if command -v dockerd >/dev/null; then {tool} -N {DOCKER_CHAIN} 2>/dev/null; "
+        f"{tool} -C {DOCKER_CHAIN} -i {iface} -j {chain} 2>/dev/null || "
+        f"{tool} -I {DOCKER_CHAIN} 1 -i {iface} -j {chain}; fi",
         f"PostUp = {tool} -C FORWARD -o {iface} -m conntrack --ctstate RELATED,ESTABLISHED "
         f"-j ACCEPT 2>/dev/null || {tool} -I FORWARD 2 -o {iface} -m conntrack "
         f"--ctstate RELATED,ESTABLISHED -j ACCEPT",
@@ -373,6 +381,7 @@ def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquera
             f"-j MASQUERADE")
     down = [
         f"PostDown = {tool} -D FORWARD -i {iface} -j {chain} 2>/dev/null; "
+        f"{tool} -D {DOCKER_CHAIN} -i {iface} -j {chain} 2>/dev/null; "
         f"{tool} -F {chain}; {tool} -X {chain} 2>/dev/null",
         f"PostDown = {tool} -D INPUT -i {iface} -j {host_chain} 2>/dev/null; "
         f"{tool} -F {host_chain}; {tool} -X {host_chain} 2>/dev/null",
@@ -514,6 +523,38 @@ def ensure_hook(tool: str, spec: list[str], chain: str, position: int) -> None:
         run([tool, "-I", chain, str(position)] + spec)
 
 
+def _rules(tool: str, chain: str) -> list[str] | None:
+    """Reguly lancucha w postaci `iptables -S` (bez -P/-N), None gdy lancucha nie ma."""
+    result = run([tool, "-S", chain])
+    if result.returncode != 0:
+        return None
+    return [line.strip() for line in result.stdout.split("\n") if line.startswith("-A ")]
+
+
+def ensure_first(tool: str, spec: list[str], chain: str) -> None:
+    """Podpiecie ma byc PIERWSZA regula lancucha.
+
+    Samo "czy jest" (ensure_hook) nie wystarcza: Docker przy starcie wstawia swoje skoki na
+    sama gore FORWARD i nasz skok laduje nizej. Najpierw wstawiamy nowy na gore, potem usuwamy
+    stare kopie po numerach - filtrowanie nie ma przerwy nawet na ulamek sekundy.
+    """
+    rules = _rules(tool, chain)
+    if rules is None:
+        return
+    want = " ".join(["-A", chain] + spec)
+    if rules and rules[0] == want:
+        return
+    run([tool, "-I", chain, "1"] + spec)
+    # po wstawieniu stare reguly przesunely sie o jeden: indeks i (od 0) to numer i + 2
+    for number in sorted((i + 2 for i, line in enumerate(rules) if line == want), reverse=True):
+        run([tool, "-D", chain, str(number)])
+
+
+def docker_present(tool: str) -> bool:
+    """Jest Docker (program dockerd albo juz jego lancuch DOCKER-USER)."""
+    return shutil.which("dockerd") is not None or _rules(tool, DOCKER_CHAIN) is not None
+
+
 def remove_hook(tool: str, spec: list[str], chain: str, limit: int = 20) -> None:
     """Usuwa podpiecie, takze gdy zostalo dodane kilka razy.
 
@@ -533,9 +574,12 @@ def apply_family(tool: str, cfg: dict, path: str) -> None:
     for chain in (cfg["chain"], cfg["host_chain"]):
         run([tool, "-N", chain])
         run([tool, "-F", chain])
-    ensure_hook(tool, ["-i", iface, "-j", cfg["chain"]], "FORWARD", 1)
+    ensure_first(tool, ["-i", iface, "-j", cfg["chain"]], "FORWARD")
     ensure_hook(tool, ["-o", iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED",
                        "-j", "ACCEPT"], "FORWARD", 2)
+    if docker_present(tool):
+        run([tool, "-N", DOCKER_CHAIN])          # Docker go nie czysci i przepuszcza pierwszy
+        ensure_first(tool, ["-i", iface, "-j", cfg["chain"]], DOCKER_CHAIN)
     ensure_hook(tool, ["-i", iface, "-j", cfg["host_chain"]], "INPUT", 1)
     result = run([f"{tool}-restore", "-n", path])
     if result.returncode != 0:
@@ -545,6 +589,7 @@ def apply_family(tool: str, cfg: dict, path: str) -> None:
 def teardown_family(tool: str, cfg: dict) -> None:
     iface = cfg["wg_iface"]
     remove_hook(tool, ["-i", iface, "-j", cfg["chain"]], "FORWARD")
+    remove_hook(tool, ["-i", iface, "-j", cfg["chain"]], DOCKER_CHAIN)
     remove_hook(tool, ["-o", iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED",
                        "-j", "ACCEPT"], "FORWARD")
     remove_hook(tool, ["-i", iface, "-j", cfg["host_chain"]], "INPUT")
@@ -735,13 +780,20 @@ def _live_counts(tool: str, chain: str) -> int | None:
 
 def _hook_first(tool: str, chain: str, target: str, iface: str) -> bool:
     """Czy pierwsza regula w FORWARD/INPUT to skok do naszego lancucha."""
-    result = run([tool, "-S", chain])
-    if result.returncode != 0:
+    rules = _rules(tool, chain)
+    if not rules:
         return False
-    for line in result.stdout.split("\n"):
-        if line.startswith("-A "):
-            return f"-i {iface}" in line and f"-j {target}" in line
-    return False
+    return f"-i {iface}" in rules[0] and f"-j {target}" in rules[0]
+
+
+def _forward_guarded(tool: str, target: str, iface: str) -> bool:
+    """Ruch z VPN trafia do naszego lancucha przed czymkolwiek innym: skok jest pierwszy
+    w FORWARD albo pierwszy jest skok Dockera do DOCKER-USER, a tam pierwszy jest nasz."""
+    if _hook_first(tool, "FORWARD", target, iface):
+        return True
+    rules = _rules(tool, "FORWARD") or []
+    return (bool(rules) and rules[0] == f"-A FORWARD -j {DOCKER_CHAIN}"
+            and _hook_first(tool, DOCKER_CHAIN, target, iface))
 
 
 def detect_drift(cfg: dict, expected: dict) -> list[dict]:
@@ -789,7 +841,7 @@ def detect_drift(cfg: dict, expected: dict) -> list[dict]:
                 add("chain", f"{tool}: brak lancucha {chain}")
             elif want is not None and have != want:
                 add("chain", f"{tool}: {chain} ma {have} regul zamiast {want}")
-        if not _hook_first(tool, "FORWARD", cfg["chain"], cfg["wg_iface"]):
+        if not _forward_guarded(tool, cfg["chain"], cfg["wg_iface"]):
             add("hook", f"{tool}: pierwsza regula FORWARD to nie skok do {cfg['chain']} "
                         f"- cos zostalo wstawione przed panelem")
     return findings
@@ -1372,6 +1424,87 @@ def op_tls(payload: dict) -> dict:
             "permitted": permitted}
 
 
+# --------------------------------------------------------------------------
+# pelna kopia: klucz serwera i urzad certyfikacji (panel szyfruje je haslem kopii)
+# --------------------------------------------------------------------------
+
+KEY_RE = re.compile(r"^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$")
+
+
+def op_system_export(payload: dict) -> dict:
+    """Tozsamosc tego Pi do pelnej kopii: klucz prywatny serwera i urzad certyfikacji panelu.
+    Panel wola to tylko przy kopii z haslem - bez hasla klucz nie wychodzi z helpera."""
+    cfg = validate_settings(payload["settings"])
+    out = {"server_key": read_private_key(cfg), "ca": None}
+    crt, key = os.path.join(CA_DIR, "ca.crt"), os.path.join(CA_DIR, "ca.key")
+    if os.path.exists(crt) and os.path.exists(key):
+        out["ca"] = {"crt": open(crt, encoding="utf8").read(),
+                     "key": open(key, encoding="utf8").read(),
+                     "json": json.dumps(_read_json(os.path.join(CA_DIR, "ca.json")))}
+    log.info("pelna kopia: wydano klucz serwera i urzad certyfikacji")
+    return out
+
+
+def _set_conf_key(path: str, key: str) -> bool:
+    """Podmienia PrivateKey w istniejacym wg0.conf (helper czyta klucz najpierw stamtad)."""
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf8") as handle:
+        lines = handle.read().split("\n")
+    changed = False
+    for index, line in enumerate(lines):
+        if line.strip().startswith("PrivateKey"):
+            lines[index] = f"PrivateKey = {key}"
+            changed = True
+    if changed:
+        write_private(path, "\n".join(lines))
+    return changed
+
+
+def op_system_import(payload: dict) -> dict:
+    """Odtworzenie tozsamosci z pelnej kopii: klucz serwera (stare pliki osob dzialaja dalej)
+    i urzad certyfikacji (nie trzeba ponownie instalowac ca.crt na urzadzeniach)."""
+    cfg = validate_settings(payload["settings"])
+    result = {"key_changed": False, "ca_restored": False}
+    key = str(payload.get("server_key") or "").strip()
+    if key:
+        if not KEY_RE.match(key):
+            raise Rejected("to nie jest klucz prywatny WireGuard")
+        try:
+            current = read_private_key(cfg)
+        except Rejected:
+            current = ""
+        if key != current:
+            os.makedirs(WG_DIR, exist_ok=True)
+            os.chmod(WG_DIR, 0o700)
+            write_private(os.path.join(WG_DIR, "server_private.key"), key + "\n")
+            _set_conf_key(conf_path(cfg), key)
+            result["key_changed"] = True
+            log.warning("pelna kopia: przywrocono klucz serwera")
+    ca = payload.get("ca")
+    if isinstance(ca, dict) and ca.get("crt") and ca.get("key"):
+        if "BEGIN CERTIFICATE" not in ca["crt"] or "PRIVATE KEY" not in ca["key"]:
+            raise Rejected("urzad certyfikacji w kopii jest uszkodzony")
+        with _tls_lock:
+            os.makedirs(CA_DIR, exist_ok=True)
+            os.chmod(CA_DIR, 0o700)
+            write_private(os.path.join(CA_DIR, "ca.key"), ca["key"])
+            write_private(os.path.join(CA_DIR, "ca.crt"), ca["crt"])
+            write_private(os.path.join(CA_DIR, "ca.json"), ca.get("json") or "{}")
+            os.chmod(os.path.join(CA_DIR, "ca.crt"), 0o644)
+            # certyfikat panelu od nowa z przywroconego urzedu (albo nowy urzad, jesli stary
+            # nie obejmuje obecnej nazwy Pi lub sieci - wtedy trzeba zainstalowac nowy ca.crt)
+            if cfg.get("tls", True):
+                try:
+                    ips, dns, permitted = _tls_names(cfg)
+                    result["ca_new"] = _ensure_ca(dns, permitted)
+                    _ensure_server(ips, dns, True)
+                except Exception as exc:  # noqa: BLE001 - certyfikat nie moze zatrzymac odtwarzania
+                    result["tls_error"] = str(exc)
+        result["ca_restored"] = not result.get("ca_new", False)
+    return result
+
+
 OPS = {
     "ping": op_ping,
     "status": op_status,
@@ -1385,6 +1518,8 @@ OPS = {
     "drift": op_drift,
     "detect_lan6": op_detect_lan6,
     "tls": op_tls,
+    "system_export": op_system_export,
+    "system_import": op_system_import,
 }
 
 

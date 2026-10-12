@@ -1,14 +1,16 @@
 """Widoki HTML. Bez frameworka i bez kroku budowania - same funkcje zwracajace tekst."""
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
+import re
 import threading
 import time
 import urllib.parse
 
-from . import db, dual, i18n, notify, render
+from . import db, dual, export, i18n, notify, render
 from .i18n import _
 
 
@@ -108,6 +110,22 @@ def pending_bar(sess, state: dict) -> str:
 </div>"""
 
 
+_STYLE_VERSION: list = []
+
+
+def style_version() -> str:
+    """Odcisk pliku stylu - w adresie, zeby przegladarka mogla go trzymac dlugo, a po
+    aktualizacji panelu i tak pobrala nowy."""
+    if not _STYLE_VERSION:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "style.css")
+        try:
+            with open(path, "rb") as handle:
+                _STYLE_VERSION.append(hashlib.sha256(handle.read()).hexdigest()[:12])
+        except OSError:
+            _STYLE_VERSION.append("0")
+    return _STYLE_VERSION[0]
+
+
 def confirm_dialog() -> str:
     return f"""
 <dialog id="wg-confirm" class="wg-dialog" aria-labelledby="wg-confirm-title"
@@ -127,11 +145,11 @@ def confirm_dialog() -> str:
 def js_texts() -> str:
     """Teksty dla skryptow w biezacym jezyku - skrypt nie ma w sobie zadnego jezyka."""
     return json.dumps({
-        "sure": _("Na pewno?"), "yes": _("Tak"),
+        "sure": _("Na pewno?"), "yes": _("Tak"), "collapse": _("Zwiń"),
         "not_pending": _("Zmiana nie czeka już na potwierdzenie."),
         "diff_error": _("Nie udało się wczytać różnicy."), "never": _("nigdy"),
         "s_ago": _("{n} s temu"), "min_ago": _("{n} min temu"), "h_ago": _("{n} h temu"),
-        "d_ago": _("{n} dni temu"), "copied": _("Skopiowano"),
+        "d1_ago": _("1 dzień temu"), "d_ago": _("{n} dni temu"), "copied": _("Skopiowano"),
         "theme_dark": _("ciemny"), "theme_light": _("jasny"),
     }, ensure_ascii=False).replace("</", "<\\/")
 
@@ -199,26 +217,95 @@ document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("form[data-track-changes]").forEach(wgTrackChanges);
 });
 
-// --- kopie: tresc okna usuwania zalezy od tego, co zaznaczono ---
+// --- kopie: jedna lista, akcje na zaznaczonych ---
+function wgBackupBoxes() {
+  return Array.prototype.slice.call(
+    document.querySelectorAll('input[form="backup-pick"][name="id"]'));
+}
 function wgBackupPick() {
-  var form = document.getElementById("backup-delete");
+  var form = document.getElementById("backup-pick");
   if (!form) return;
-  var local = 0, smb = 0;
-  document.querySelectorAll('input[form="backup-delete"]:checked').forEach(function (box) {
+  var boxes = wgBackupBoxes(), picked = [], local = 0, smb = 0;
+  boxes.forEach(function (box) {
     var row = box.closest("tr");
-    if (row && row.dataset.where === "smb") smb++; else local++;
+    if (row) row.classList.toggle("picked", box.checked);
+    if (!box.checked) return;
+    picked.push(row ? row.dataset : {});
+    if (row && row.dataset.smb === "1") smb++; else local++;
   });
-  form.dataset.confirm = smb ? form.dataset.textSmb : form.dataset.textLocal;
-  form.dataset.confirmDetail = form.dataset.detail.replace("{n}", local + smb)
-    .replace("{local}", local).replace("{smb}", smb);
-  var button = form.querySelector("button.danger");
-  if (button) button.disabled = local + smb === 0;
+  var del = form.querySelector("[data-delete]");
+  if (del) {
+    del.dataset.confirm = smb ? del.dataset.textSmb : del.dataset.textLocal;
+    del.dataset.confirmDetail = del.dataset.detail.replace("{n}", local + smb)
+      .replace("{local}", local).replace("{smb}", smb);
+    del.disabled = !picked.length;
+  }
+  var verify = form.querySelector("[data-verify]");
+  if (verify) verify.disabled = !picked.some(function (d) { return d.ok === "1"; });
+  var restore = form.querySelector("[data-restore]");
+  if (restore) restore.disabled = !(picked.length === 1 && picked[0].restorable === "1");
+  var count = document.getElementById("pick-count");
+  if (count) count.textContent = picked.length
+    ? count.dataset.some.replace("{n}", picked.length) : count.dataset.none;
+  var all = document.querySelector("[data-pick-all]");
+  if (all) {
+    all.checked = picked.length > 0 && picked.length === boxes.length;
+    all.indeterminate = picked.length > 0 && picked.length < boxes.length;
+  }
+}
+function wgRestoreOpen() {
+  var box = wgBackupBoxes().filter(function (b) { return b.checked; });
+  var dlg = document.getElementById("restore-dialog");
+  if (box.length !== 1 || !dlg) return;
+  var d = box[0].closest("tr").dataset;
+  dlg.querySelector('input[name="source"]').value = "id:" + box[0].value;
+  dlg.querySelector('[data-fill="stamp"]').textContent = d.stamp;
+  dlg.querySelector('[data-fill="about"]').textContent = d.about;
+  dlg.querySelector('[data-for="full"]').hidden = d.kind !== "full";
+  dlg.querySelector('[data-for="found"]').hidden = d.kind !== "found";
+  dlg.querySelector('[data-for="other"]').hidden = d.kind === "full" || d.kind === "found";
+  var secret = dlg.querySelector(".restore-secret"), field = secret.querySelector("input");
+  secret.hidden = d.enc !== "1";
+  field.value = "";
+  field.required = d.enc === "1" && dlg.dataset.saved !== "1";
+  dlg.querySelector('input[name="with_users"]').checked = false;
+  if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
+  dlg.querySelector("[data-close]").focus();   // Enter niczego nie odtworzy przypadkiem
 }
 document.addEventListener("DOMContentLoaded", function () {
-  document.querySelectorAll('input[form="backup-delete"]').forEach(function (box) {
-    box.addEventListener("change", wgBackupPick);
+  var boxes = wgBackupBoxes();
+  if (!boxes.length && !document.getElementById("backup-pick")) return;
+  boxes.forEach(function (box) { box.addEventListener("change", wgBackupPick); });
+  var all = document.querySelector("[data-pick-all]");
+  if (all) all.addEventListener("change", function () {
+    boxes.forEach(function (box) { box.checked = all.checked; });
+    wgBackupPick();
+  });
+  // klikniecie w wiersz zaznacza go (i odznacza) - nie trzeba celowac w kwadracik
+  document.querySelectorAll("table.backup-list tbody tr").forEach(function (row) {
+    row.addEventListener("click", function (ev) {
+      if (ev.target.closest("input, a, button, label")) return;
+      var box = row.querySelector('input[name="id"]');
+      if (!box) return;
+      box.checked = !box.checked;
+      wgBackupPick();
+    });
+  });
+  document.querySelectorAll("dialog [data-close]").forEach(function (button) {
+    button.addEventListener("click", function () { button.closest("dialog").close(); });
+  });
+  var dlg = document.getElementById("restore-dialog");
+  if (dlg) dlg.addEventListener("click", function (ev) {    // klikniecie w tlo = Anuluj
+    if (ev.target === dlg) dlg.close();
   });
   wgBackupPick();
+});
+
+// --- telefon: wykres ruchu przewijany w bok - startuje od najnowszych godzin ---
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".chart-scroll").forEach(function (box) {
+    box.scrollLeft = box.scrollWidth;
+  });
 });
 
 // --- telefon: menu nawigacji i tabele jako listy ---
@@ -253,8 +340,12 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 
 var wgAsking = null;
+// pytanie moze siedziec na samym przycisku (formaction) - jeden formularz, kilka akcji
+function wgAsks(form, submitter) {
+  return (submitter && submitter.dataset && submitter.dataset.confirm) ? submitter : form;
+}
 function wgOpenConfirm(form, submitter) {
-  var d = form.dataset, dlg = document.getElementById("wg-confirm");
+  var d = wgAsks(form, submitter).dataset, dlg = document.getElementById("wg-confirm");
   if (!dlg || typeof dlg.showModal !== "function") {      // stara przegladarka
     var text = (d.confirmTitle ? d.confirmTitle + "\n\n" : "") + d.confirm
              + (d.confirmDetail ? "\n\n" + d.confirmDetail : "");
@@ -283,13 +374,14 @@ function wgSubmitConfirmed(form, submitter) {
     if (submitter && submitter.form === form) form.requestSubmit(submitter);
     else form.requestSubmit();
   } else {
+    if (submitter && submitter.formAction) form.action = submitter.formAction;
     form.submit();
   }
 }
 document.addEventListener("submit", function (ev) {
   var form = ev.target;
   if (!form || (form.getAttribute("method") || "").toLowerCase() !== "post") return;
-  if (form.dataset.confirm && form.dataset.confirmed !== "1") {
+  if (wgAsks(form, ev.submitter).dataset.confirm && form.dataset.confirmed !== "1") {
     ev.preventDefault();
     wgOpenConfirm(form, ev.submitter || null);
     return;
@@ -522,10 +614,20 @@ function wgDiff(button) {{
 function wgToggle(id, button) {{
   var box = document.getElementById(id);
   if (!box) return;
+  // napis przycisku zapamietany przed pierwsza zmiana - po zwinieciu wraca ten sam
+  if (!button.dataset.label) button.dataset.label = button.textContent;
   var open = box.classList.toggle("hidden") === false;
-  button.textContent = open ? "Zwin" : button.dataset.label || button.textContent;
-  if (!button.dataset.label && !open) button.dataset.label = button.textContent;
+  button.textContent = open ? WG_T.collapse : button.dataset.label;
+  button.setAttribute("aria-expanded", open ? "true" : "false");
 }}
+document.addEventListener("DOMContentLoaded", function () {{
+  // link do ukrytej sekcji (np. /settings#zaawansowane) od razu ja otwiera
+  var box = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+  if (!box || !box.classList.contains("hidden")) return;
+  var button = document.querySelector('[onclick*="' + box.id + '"]');
+  if (button) wgToggle(box.id, button); else box.classList.remove("hidden");
+  box.scrollIntoView({{block: "start"}});
+}});
 document.addEventListener("DOMContentLoaded", function () {{
   // zielony pasek znika sam i nie wraca po odswiezeniu strony
   var flash = document.querySelector(".banner.ok, .flash");
@@ -544,6 +646,7 @@ function wgHandshakeText(seconds, now) {{
   if (d < 60) return [WG_T.s_ago.replace("{{n}}", d), state];
   if (d < 3600) return [WG_T.min_ago.replace("{{n}}", Math.floor(d / 60)), state];
   if (d < 86400) return [WG_T.h_ago.replace("{{n}}", Math.floor(d / 3600)), state];
+  if (d < 172800) return [WG_T.d1_ago, state];
   return [WG_T.d_ago.replace("{{n}}", Math.floor(d / 86400)), state];
 }}
 function wgBytes(value) {{
@@ -639,7 +742,7 @@ document.addEventListener("DOMContentLoaded", function () {{
 </script>
 <script>var WG_T = {js_texts()};</script>
 <script>{PANEL_JS}</script>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={style_version()}">
 </head><body>
 <header><a href="/" class="logo">wg-panel</a>{menu}{nav}</header>
 {extras}
@@ -684,7 +787,7 @@ def tls_card(sess, info: dict, cfg: dict | None = None) -> str:
         f'<option value="{key}"{" selected" if key == mode else ""}>{e(label)}</option>'
         for key, label in (("self", _("własny urząd certyfikacji panelu (domyślnie)")),
                            ("custom", _("własny certyfikat z plików (np. Let's Encrypt)"))))
-    pi = cfg.get("server_lan") or "192.168.1.10"
+    pi = cfg.get("server_lan") or db.DEFAULT_SETTINGS["server_lan"]
     dns = (info.get("dns") or ["raspberrypi.local"])[-1]
     caddy = (f"@wgpanel host panel.example.com\nhandle @wgpanel {{\n"
              f"    reverse_proxy https://{pi}:{TLS_PORT} {{\n        transport http {{\n"
@@ -726,7 +829,7 @@ def tls_card(sess, info: dict, cfg: dict | None = None) -> str:
           </div>
           <details class="full proxy-box"{" open" if proxies else ""}>
             <summary>{_("Reverse proxy na innym serwerze (opcjonalnie)")}</summary>
-            <p class="muted">{_("Np. Caddy na osobnym serwerze. Panel zostaje przy swoim HTTPS, a nagłówkom proxy "
+            <p class="muted">{_("Np. Caddy na innym serwerze w domu. Panel zostaje przy swoim HTTPS, a nagłówkom proxy "
                                 "(X-Forwarded-For, X-Forwarded-Proto) ufa wyłącznie od podanych adresów - "
                                 "od innych urządzeń są ignorowane.")}</p>
             <div class="sub-row">
@@ -881,7 +984,22 @@ def _handshake(seconds: int) -> tuple:
         return _("{n} min temu", n=delta // 60), state
     if delta < 86400:
         return _("{n} h temu", n=delta // 3600), state
+    if delta < 2 * 86400:
+        return _("1 dzień temu"), state
     return _("{n} dni temu", n=delta // 86400), state
+
+
+def _known(stat: dict) -> dict:
+    """Same dane z jadra - gdy panel nie ma jeszcze zapamietanych (np. tuz po aktualizacji)."""
+    return {"handshake": int(stat.get("latest_handshake", 0) or 0),
+            "rx": int(stat.get("rx", 0) or 0), "tx": int(stat.get("tx", 0) or 0), "since": 0}
+
+
+def _since_title(known: dict) -> str:
+    if not known.get("since"):
+        return ""
+    return ' title="' + e(_("łącznie od {date}", date=time.strftime(
+        "%Y-%m-%d", time.localtime(known["since"])))) + '"'
 
 
 def _bytes(value: int) -> str:
@@ -898,10 +1016,12 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
               warnings: dict | None = None, drift: list | None = None,
               chart: list | None = None, rolled_back: bool = False,
               can_discard: bool = False, diff_parts: list | None = None,
-              discard_enough: bool = False, dual_use: dict | None = None) -> str:
+              discard_enough: bool = False, dual_use: dict | None = None,
+              seen: dict | None = None) -> str:
     expiry = expiry or {}
     warnings = warnings or {}
     dual_use = dual_use or {}
+    seen = seen or {}       # zapamietany handshake i laczny ruch (panel/stats.py)
     dual_badge = ('<span class="badge dead" title="' +
                   e(_("Ten sam plik konfiguracyjny działa na dwóch urządzeniach naraz")) + '">' +
                   e(_("2 urządzenia")) + '</span>')
@@ -911,14 +1031,15 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
               "until": _("Ważny do")}
     for peer in peers:
         stat = live.get(peer["pubkey"], {})
-        when, css = _handshake(stat.get("latest_handshake", 0))
+        known = seen.get(peer["id"]) or _known(stat)
+        when, css = _handshake(known["handshake"])
         state_badge = {
             "active": '<span class="badge ok">' + _("aktywny") + '</span>',
             "suspended": '<span class="badge warn">' + _("zawieszony") + '</span>',
         }.get(peer["state"], "")
         transfer = ""
-        if stat:
-            transfer = f'{_bytes(stat.get("rx", 0))} / {_bytes(stat.get("tx", 0))}'
+        if stat or known["rx"] or known["tx"]:
+            transfer = f'{_bytes(known["rx"])} / {_bytes(known["tx"])}'
         warning = ('<span class="badge warn">' + e(warnings[peer["id"]]) + '</span>'
                    if warnings.get(peer["id"]) else "")
         if peer["id"] in dual_use:
@@ -932,8 +1053,8 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
             <td class="c-tier" data-label="{e(labels['tier'])}">{e(peer['tier_name'] or '—')}</td>
             <td class="c-state">{state_badge}</td>
             <td class="hs {css} c-hs" data-label="{labels['hs']}"
-                data-handshake="{stat.get('latest_handshake', 0)}">{e(when)}</td>
-            <td class="muted transfer c-transfer" data-label="{e(labels['traffic'])}" data-transfer="1">{e(transfer)}</td>
+                data-handshake="{known['handshake']}">{e(when)}</td>
+            <td class="muted transfer c-transfer" data-label="{e(labels['traffic'])}" data-transfer="1"{_since_title(known)}>{e(transfer)}</td>
             <td class="muted c-exp" data-label="{e(labels['until'])}">{e(expiry.get(peer['id'], '—'))}</td>
           </tr>""")
 
@@ -1084,7 +1205,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
                 expiry_text: str = "", warning: str = "",
                 chart: list | None = None, route: dict | None = None,
                 issued: dict | None = None, just_created: bool = False,
-                dual_use: dict | None = None) -> str:
+                dual_use: dict | None = None, seen: dict | None = None) -> str:
     route = route or {"mode": "auto", "own": False, "allowed": [], "notes": []}
     issued = issued or {"state": "unknown"}
     expiry_text = expiry_text or _("bezterminowo")
@@ -1122,7 +1243,8 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
         rule_rows.append('<tr><td colspan="5" class="muted">' +
                          _("Brak reguł własnych - obowiązuje sam tier.") + '</td></tr>')
 
-    when, css = _handshake((stat or {}).get("latest_handshake", 0))
+    known = seen or _known(stat or {})
+    when, css = _handshake(known["handshake"])
     endpoint = (stat or {}).get("endpoint", "—")
     expires_value = (time.strftime("%Y-%m-%d", time.localtime(peer["expires_at"]))
                      if peer["expires_at"] else "")
@@ -1274,6 +1396,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
           {ip6}
           <div><span class="muted">handshake</span><strong class="{css}">{e(when)}</strong></div>
           <div><span class="muted">endpoint</span><strong>{e(endpoint)}</strong></div>
+          <div{_since_title(known)}><span class="muted">{_("ruch łącznie")}</span><strong>{e(_bytes(known['rx']))} / {e(_bytes(known['tx']))}</strong></div>
           <div><span class="muted">{_("stan")}</span><strong>{e(state_names.get(peer['state'], peer['state']))}</strong></div>
           <div><span class="muted">{_("ważny do")}</span><strong>{e(expires_label)}</strong></div>
         </div>
@@ -1543,6 +1666,7 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
         ("panel_port", _("Port panelu")),
         ("expiry_warn_days", _("Ostrzeżenie [dni]")),
         ("audit_days", _("Dziennik [dni]")),
+        ("alerts_days", _("Alerty [dni]")),
         ("traffic_anomaly_factor", _("Anomalia [x mediana]")),
         ("traffic_anomaly_min_mb", _("Anomalia [MB]")),
     ]
@@ -1551,7 +1675,8 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
         "server_lan": _("adres Pi w sieci domowej"),
         "dns_full": _("trafia do plików z całym ruchem"),
         "mtu": _("puste = domyślne"),
-        "audit_days": _("potem czyszczone"),
+        "audit_days": _("starsze znikają; 0 = bez limitu"),
+        "alerts_days": _("starsze znikają; 0 = bez limitu"),
         "traffic_anomaly_factor": _("ile razy więcej niż zwykle"),
     }
 
@@ -1676,7 +1801,13 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     return page(_("Ustawienia"), body, sess, flash=flash, error=error, alerts=alerts)
 
 
-def audit_page(sess, rows, newest_first: bool = True, days: int = 7, alerts: int = 0) -> str:
+def kept_for(days: int) -> str:
+    """Jak dlugo leza wpisy - naglowek dziennika i alertow."""
+    return _("trzymane {days} dni", days=days) if days > 0 else _("trzymane bez limitu")
+
+
+def audit_page(sess, rows, newest_first: bool = True, days: int = 90, alerts: int = 0,
+               paging: tuple | None = None) -> str:
     def action(code):
         label = i18n.audit_action(code)
         extra = f' <code class="muted">{e(code)}</code>' if label != code else ""
@@ -1694,7 +1825,7 @@ def audit_page(sess, rows, newest_first: bool = True, days: int = 7, alerts: int
       <div class="card">
         <div class="head">
           <h1>{_("Dziennik")}</h1>
-          <span class="muted">{_("{n} wpisów · trzymane {days} dni", n=len(rows), days=days)}</span>
+          <span class="muted">{_("{n} wpisów", n=paging[2] if paging else len(rows))} · {e(kept_for(days))}</span>
         </div>
         <table class="stack">
           <thead><tr>
@@ -1703,6 +1834,7 @@ def audit_page(sess, rows, newest_first: bool = True, days: int = 7, alerts: int
           </tr></thead>
           <tbody>{items}</tbody>
         </table>
+        {pager("/audit" + ("" if newest_first else "?order=asc"), paging)}
       </div>"""
     return page(_("Dziennik"), body, sess, alerts=alerts)
 
@@ -1770,7 +1902,7 @@ def simulator_page(sess, cfg, peers, form: dict, result=None, alerts: int = 0) -
         <form method="get" action="/simulator" class="row">
           <label>{_("Od kogo")}<select name="src">{options}</select></label>
           <label>{_("Do adresu")}<input name="dst" value="{e(form.get('dst') or form.get('dst_default', ''))}"
-                 placeholder="192.168.1.11"></label>
+                 placeholder="192.168.1.10"></label>
           <label>Port<input name="port" value="{e(form.get('port', '445'))}"></label>
           <label>Proto<select name="proto">
             <option value="tcp"{' selected' if form.get('proto') != 'udp' else ''}>tcp</option>
@@ -1789,7 +1921,25 @@ def simulator_page(sess, cfg, peers, form: dict, result=None, alerts: int = 0) -
 # alerty
 # --------------------------------------------------------------------------
 
-def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int = 0) -> str:
+def pager(base: str, paging: tuple | None) -> str:
+    """Nowsze / starsze - dlugie listy (alerty, dziennik) po kawalku, telefon nie przewija metrow."""
+    if not paging:
+        return ""
+    number, per_page, total = paging
+    pages = max(1, -(-total // per_page))
+    if pages == 1:
+        return ""
+    sep = "&" if "?" in base else "?"
+    newer = (f'<a class="button" href="{e(base)}{sep}page={number - 1}">← {e(_("Nowsze"))}</a>'
+             if number > 1 else "")
+    older = (f'<a class="button" href="{e(base)}{sep}page={number + 1}">{e(_("Starsze"))} →</a>'
+             if number < pages else "")
+    return (f'<div class="pager" role="navigation" aria-label="{e(_("Strony"))}">{newer}'
+            f'<span class="muted">{e(_("strona {n} z {all}", n=number, all=pages))}</span>{older}</div>')
+
+
+def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int = 0,
+                paging: tuple | None = None, days: int = 90) -> str:
     csrf = _csrf(sess)
     items = []
     for row in rows:
@@ -1799,9 +1949,9 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
         delete_ask = ask(_("Usunąć ten alert?"), row["message"], _("Usuń alert"))
         items.append(f"""
           <tr>
-            <td class="muted">{e(stamp)}</td>
-            <td><span class="badge {css}">{e(row['kind'])}</span></td>
-            <td>{e(row['message'])}</td>
+            <td class="muted nowrap">{e(stamp)}</td>
+            <td><span class="badge {css}" title="{e(row['kind'])}">{e(i18n.alert_kind(row['kind']))}</span></td>
+            <td>{e(i18n.logged(row['message']))}</td>
             <td class="muted">{e(sent)}</td>
             <td><form method="post" action="/alerts/{row['id']}/delete" class="inline"{delete_ask}>
                   {csrf}
@@ -1840,6 +1990,9 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
         </div>
         <table class="stack"><thead><tr>{heads}</tr></thead>
           <tbody>{''.join(items)}</tbody></table>
+        {pager("/alerts", paging)}
+        <p class="muted small">{_("Alerty: {kept}. Zmienisz to w {where}.", kept=e(kept_for(days)),
+                                  where='<a href="/settings#zaawansowane">' + e(_("Ustawieniach → Zaawansowane")) + '</a>')}</p>
       </div>
 
       <div class="card">
@@ -1847,10 +2000,10 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
         {weak_box}
         <p class="muted">{_("Najważniejszy alert to {alert} - ten sam klucz łączy się z nowego "
                             "adresu. To pierwszy sygnał, że plik konfiguracyjny wyciekł.",
-                            alert="<code>new_endpoint</code>")}
+                            alert="<strong>" + e(i18n.alert_kind("new_endpoint")) + "</strong>")}
           {_("{alert} przychodzi, gdy ten sam plik działa na dwóch urządzeniach naraz - "
              "wyrzucają się wtedy nawzajem i połączenie co chwilę się zrywa.",
-             alert="<code>two_devices</code>")}</p>
+             alert="<strong>" + e(i18n.alert_kind("two_devices")) + "</strong>")}</p>
         <form method="post" action="/alerts/settings" class="row">
           {csrf}
           <label>{_("Kanał")}<select name="alerts_channel">
@@ -1916,198 +2069,489 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
 # --------------------------------------------------------------------------
 
 def _pre_restore(row) -> bool:
-    """Kopia zapisana automatycznie tuz przed odtworzeniem. Poznajemy ja po opisie zapisanym
-    w bazie ("kopia stanu przed odtworzeniem") - to dane, nie tekst interfejsu."""
-    return "przed odtworzeniem" in (row["detail"] or "")
+    """Kopia zapisana automatycznie tuz przed odtworzeniem albo aktualizacja. Poznajemy ja po
+    opisie zapisanym w bazie ("kopia stanu przed ...") - to dane, nie tekst interfejsu."""
+    detail = row["detail"] or ""
+    return "przed odtworzeniem" in detail or "przed aktualizacją" in detail
+
+
+def _found(row) -> bool:
+    """Kopia dopisana do listy, bo lezala na NAS albo na Pi (nie zrobil jej ten panel)."""
+    return (row["detail"] or "").startswith("znaleziona")
+
+
+def _col(row, key: str):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+BACKUP_KINDS = {"full": "ok", "nokey": "warn", "snapshot": "", "found": "", "basic": "warn",
+                "failed": ""}
+
+
+def _kind_label(kind: str) -> str:
+    return {"full": _("pełna"), "nokey": _("pełna bez klucza"), "snapshot": _("sprzed odtworzenia"),
+            "found": _("znaleziona"), "basic": _("podstawowa"), "failed": "—"}[kind]
+
+
+def _kind_help(kind: str) -> str:
+    """Co jest w kopii danego rodzaju - podpowiedz przy plakietce i legenda pod lista."""
+    return {
+        "full": _("Wszystko, razem z kluczem serwera. Po awarii odtwarzaj najnowszą taką."),
+        "nokey": _("Pełna, ale bez klucza serwera (helper wtedy nie odpowiadał) - rzadkie."),
+        "snapshot": _("Zapisana sama tuż przed odtworzeniem - do cofnięcia pomyłki."),
+        "found": _("Leżała na NAS albo na Pi, panel jej nie robił (np. sprzed reinstalacji)."),
+        "basic": _("Bez klucza serwera, haseł i historii - zrobiona bez hasła kopii."),
+        "failed": "",
+    }[kind]
+
+
+def _state(item: dict) -> tuple:
+    """Stan pliku jednym slowem: (css, napis, podpowiedz). Zamiast osobnych kolumn i dopiskow."""
+    if not item["ok"]:
+        return "dead", _("nieudana"), i18n.helper(item["detail"])
+    if item["gone"] and not item["where"]:
+        why = (_("Przy ostatnim odświeżeniu listy pliku nie było na NAS.") if "smb" in item["gone"]
+               else _("Plik usunęło sprzątanie „Na Pi trzymaj ostatnie”."))
+        return "dead", _("brak pliku"), why
+    if item["verified_at"] and not item["verify_ok"]:
+        return "dead", _("uszkodzona"), i18n.audit_detail(item["verify_detail"])
+    if item["verified_at"]:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item["verified_at"]))
+        return "ok", _("sprawdzona"), _("Suma SHA-256 zgodna ({when}).", when=when)
+    return "", _("niesprawdzona"), _("Zaznacz i kliknij „Sprawdź zaznaczone”.")
+
+
+def backup_legend() -> str:
+    """Krotka legenda pod lista - zwinieta, po jednym zdaniu na oznaczenie."""
+    def item(css: str, label: str, text: str) -> str:
+        badge = (f'<span class="badge {css}">{e(label)}</span>' if css is not None
+                 else f'<span class="plain">{e(label)}</span>')
+        return f'<li>{badge}<span>{e(text)}</span></li>'
+    kinds = "".join(item(BACKUP_KINDS[k], _kind_label(k), _kind_help(k))
+                    for k in ("full", "snapshot", "found", "basic", "nokey"))
+    kinds += item("", _("sprzed aktualizacji"),
+                  _("Zapisana przez instalator tuż przed aktualizacją panelu."))
+    states = "".join([
+        item("ok", _("sprawdzona"), _("Plik ma tę samą sumę co przy zapisie.")),
+        item(None, _("niesprawdzona"), _("Jeszcze nie sprawdzana.")),
+        item("dead", _("uszkodzona"), _("Plik zmieniony albo uszkodzony - nie do odtworzenia.")),
+        item("dead", _("nieudana"), _("Kopia się nie zapisała; powód po najechaniu.")),
+        item("dead", _("brak pliku"), _("Pliku już nie ma - wpis usuń.")),
+    ])
+    return (f'<details class="more legend"><summary>{e(_("Co znaczą oznaczenia?"))}</summary>'
+            f'<div class="legend-cols"><div><h4>{e(_("Rodzaj"))}</h4><ul>{kinds}</ul></div>'
+            f'<div><h4>{e(_("Stan"))}</h4><ul>{states}</ul></div></div>'
+            f'<p class="muted">{e(_("„NAS + Pi” - plik jest w obu miejscach; odtworzenie bierze go z Pi."))}</p>'
+            f'</details>')
+
+
+def _where_label(where: set) -> str:
+    if where == {"smb", "local"}:
+        return _("NAS + Pi")
+    return _("NAS") if "smb" in where else _("Pi")
+
+
+def backup_items(rows, files, scan: dict | None = None, exists=os.path.exists) -> list:
+    """Jedna lista kopii: wiersze historii plus to, gdzie plik faktycznie lezy.
+
+    Na Pi sprawdzamy plik od razu (to tylko dysk). NAS nie budzimy - "brak na NAS"
+    wynika z ostatniego klikniecia "Odswiez liste z NAS" (scan) i dotyczy tylko kopii
+    starszych od tamtego sprawdzenia."""
+    files = set(files or [])
+    on_nas = set(scan["names"]) if scan else None
+    items = []
+    for row in rows:
+        path = (row["path"] or "").replace("\\", "/")
+        name = path.rsplit("/", 1)[-1]
+        smb = path.startswith("//") or (row["target"] == "smb" and not path)
+        where, gone = set(), set()
+        if row["ok"]:
+            if path.startswith("//"):
+                if on_nas is not None and row["ts"] < scan["ts"] and name not in on_nas:
+                    gone.add("smb")
+                else:
+                    where.add("smb")
+                if name in files:
+                    where.add("local")        # kopia robocza na Pi (sprzata ja "trzymaj ostatnie")
+            elif path and exists(path):
+                where.add("local")
+            else:
+                gone.add("local")
+        detail = row["detail"] or ""
+        if not row["ok"]:
+            kind = "failed"
+        elif _pre_restore(row):
+            kind = "snapshot"
+        elif _found(row):
+            kind = "found"
+        elif "pełna kopia" in detail:
+            kind = "nokey" if "bez klucza" in detail else "full"
+        else:
+            kind = "basic"
+        items.append({
+            "id": row["id"], "name": name, "ts": row["ts"], "ok": bool(row["ok"]), "kind": kind,
+            "where": where, "gone": gone, "smb": smb, "bytes": row["bytes"] or 0,
+            "sha256": row["sha256"] or "", "verified_at": _col(row, "verified_at"),
+            "verify_ok": _col(row, "verify_ok"), "verify_detail": _col(row, "verify_detail") or "",
+            "detail": detail, "pre": _pre_restore(row), "found": _found(row),
+            "update": "przed aktualizacją" in detail,
+            "encrypted": bool(row["encrypted"]),
+            "restorable": bool(row["ok"] and where),
+        })
+    return items
+
+
+def _verify_text(item: dict) -> str:
+    """Stan sumy kontrolnej jednym slowem - do tabeli i do okna odtwarzania."""
+    if not item["ok"]:
+        return ""
+    if item["verified_at"]:
+        return _("suma zgodna") if item["verify_ok"] else _("suma NIEZGODNA")
+    return _("niesprawdzona")
+
+
+def _stamp(ts) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "—"
+
+
+def backup_row(item: dict) -> str:
+    stamp = _stamp(item["ts"])
+    if item["kind"] == "failed":
+        kind = '<span class="plain muted">—</span>'
+    elif item["kind"] == "snapshot" and item.get("update"):
+        kind = (f'<span class="badge" title="{e(_("Zapisana sama przez instalator tuż przed aktualizacją panelu - do cofnięcia, gdyby nowa wersja coś popsuła."))}">'
+                f'{e(_("sprzed aktualizacji"))}</span>')
+    else:
+        kind = (f'<span class="badge {BACKUP_KINDS[item["kind"]]}" title="{e(_kind_help(item["kind"]))}">'
+                f'{e(_kind_label(item["kind"]))}</span>')
+    css, label, why = _state(item)
+    state = (f'<span class="badge {css}" title="{e(why)}">{e(label)}</span>' if css
+             else f'<span class="plain muted" title="{e(why)}">{e(label)}</span>')
+    if item["where"]:
+        where = _where_label(item["where"])
+    else:
+        where = _("NAS") if item["smb"] else _("Pi")
+    where_title = (_("Plik jest na NAS i na Pi; odtworzenie bierze go z Pi.")
+                   if item["where"] == {"smb", "local"} else "")
+    size = f'{item["bytes"] / 1024:.1f} KiB' if item["bytes"] else ""
+    file_title = item["name"] + (f" · {size}" if size else "")
+    kind_name = (_("sprzed aktualizacji") if item.get("update") else
+                 _kind_label(item["kind"]) if item["kind"] != "failed" else "")
+    about = " · ".join(part for part in (
+        kind_name,
+        _where_label(item["where"]) if item["where"] else "", label) if part)
+    attrs = (f' data-stamp="{e(stamp)}" data-about="{e(about)}" data-kind="{item["kind"]}"'
+             f' data-enc="{int(item["encrypted"])}" data-smb="{int("smb" in item["where"] or "smb" in item["gone"])}"'
+             f' data-restorable="{int(item["restorable"])}" data-ok="{int(item["ok"])}"'
+             + (" data-failed" if not item["ok"] else ""))
+    return f"""
+          <tr{attrs}>
+            <td class="pick"><input type="checkbox" name="id" value="{item['id']}" form="backup-pick"
+                aria-label="{e(_("zaznacz kopię {when}", when=stamp))}"></td>
+            <td class="when" title="{e(file_title)}">{e(stamp)}</td>
+            <td class="where"{f' title="{e(where_title)}"' if where_title else ''}>{e(where)}</td>
+            <td class="kind">{kind}</td>
+            <td class="state">{state}</td>
+          </tr>"""
+
+
+def backup_kind_box(cfg: dict) -> str:
+    """Stala informacja: jaka kopia powstaje i co z tego wynika po awarii.
+    Celowo nie pasek (.banner) - zielone paski znikaja po chwili jak "Zapisano"."""
+    secret = cfg.get("backup_passphrase", "")
+    if not secret:
+        css, title = "dead", _("PODSTAWOWA, jawna")
+        text = _("Bez klucza serwera, haseł i historii. Po awarii odtworzysz z niej osoby i "
+                 "ustawienia, ale nie klucz serwera - każda osoba dostanie wtedy nowy plik. "
+                 "Ustaw hasło kopii (co najmniej {n} znaków), a kopie będą pełne i zaszyfrowane.",
+                 n=export.WEAK_PASSPHRASE)
+    elif len(secret) < export.WEAK_PASSPHRASE:
+        css, title = "warn", _("PEŁNA, ale słabe hasło")
+        text = _("Hasło kopii ma tylko {have} znaków, a pełna kopia zawiera klucz serwera. Użyj "
+                 "co najmniej {n} znaków, najlepiej z generatora w menedżerze haseł.",
+                 have=len(secret), n=export.WEAK_PASSPHRASE)
+    else:
+        css, title = "ok", _("PEŁNA, zaszyfrowana")
+        text = _("Wszystko, razem z kluczem serwera - odtworzysz z niej całe Pi. Hasło kopii "
+                 "trzymaj w menedżerze haseł.")
+    return _status_line(css, _("Rodzaj kopii") + ": " + title, text, "kind-box")
+
+
+def _status_line(css: str, title: str, text: str = "", extra: str = "") -> str:
+    note = f'<p class="muted">{e(text)}</p>' if text else ""
+    return (f'<div class="status-line {extra}"><span class="dot {css}"></span>'
+            f'<div><p><strong>{e(title)}</strong></p>{note}</div></div>')
+
+
+def target_label(target: str) -> str:
+    return {"smb": _("tylko NAS"), "both": _("NAS i Pi")}.get(target, _("tylko Pi"))
+
+
+def backup_status(cfg: dict, rows) -> str:
+    """Trzy linie na gorze strony: jaka kopia, kiedy automatycznie, jak poszla ostatnia."""
+    target = cfg.get("backup_target", "local")
+    where = target_label(target)
+    if cfg.get("backup_enabled") == "1":
+        auto = _status_line("ok", _("Automatycznie: codziennie o {time} → {where}",
+                                    time=cfg.get("backup_time", "03:30"), where=where))
+    else:
+        auto = _status_line("warn", _("Kopie automatyczne są wyłączone"),
+                            _("Włączysz je w ustawieniach kopii na dole strony."))
+    own = [row for row in rows if not _pre_restore(row) and not _found(row)]
+    last = own[0] if own else None
+    last_ok = next((row for row in own if row["ok"]), None)
+    if last is None:
+        recent = _status_line("warn", _("Ostatnia kopia: jeszcze żadnej"),
+                              _("Zrób pierwszą przyciskiem u góry."))
+    elif not last["ok"]:
+        text = i18n.helper(last["detail"] or "")
+        if last_ok is not None:
+            text += " " + _("Ostatnia udana: {when}.", when=_stamp(last_ok["ts"]))
+        recent = _status_line("dead", _("Ostatnia kopia NIEUDANA: {when}", when=_stamp(last["ts"])),
+                              text)
+    else:
+        item = backup_items([last], [], None, exists=lambda _path: True)[0]
+        place = _("NAS") if item["smb"] else _("Pi")
+        title = _("Ostatnia kopia: {when} → {where} ({ago})", when=_stamp(last["ts"]), where=place,
+                  ago=_handshake(last["ts"])[0])
+        stale = cfg.get("backup_enabled") == "1" and time.time() - last["ts"] > 36 * 3600
+        bad = last["verified_at"] and not last["verify_ok"]
+        css = "dead" if bad else ("warn" if stale else "ok")
+        text = _verify_text(item)
+        if stale:
+            text += ". " + _("Kopia automatyczna nie powstała od ponad doby - sprawdź, czy Pi "
+                             "działało o tej porze.")
+        recent = _status_line(css, title, text)
+    return f'<div class="status-list">{backup_kind_box(cfg)}{auto}{recent}</div>'
+
+
+def restore_dialog(cfg: dict, csrf: str) -> str:
+    """Okno odtwarzania - otwiera je "Odtworz zaznaczona". Samo jest pytaniem (data-asks),
+    dlatego ma pola: haslo kopii i konto panelu z kopii."""
+    saved = bool(cfg.get("backup_passphrase"))
+    hint = _("puste = hasło kopii z ustawień") if saved else _("hasło, którym zaszyfrowano kopię")
+    title = _("Odtworzyć kopię z {when}?", when="\x00")
+    head, _sep, tail = e(title).partition("\x00")
+    return f"""
+<dialog id="restore-dialog" class="wg-dialog restore-dialog" aria-labelledby="restore-title"
+        data-saved="{int(saved)}">
+  <form method="post" action="/backups/restore" class="wg-dialog-body" data-asks="dialog">
+    {csrf}
+    <input type="hidden" name="source" value="">
+    <h2 id="restore-title">{head}<span data-fill="stamp"></span>{tail}</h2>
+    <p class="muted" data-fill="about"></p>
+    <p>{e(_("Panel zastąpi osoby, tiery, reguły i ustawienia stanem z tej kopii. Obecny stan "
+            "zapisze najpierw jako osobną kopię („sprzed odtworzenia”), więc zawsze da się wrócić."))}</p>
+    <p class="key-note ok" data-for="full">{e(_("To pełna kopia: wraca też klucz serwera i certyfikat "
+            "HTTPS - dotychczasowe pliki osób będą działać."))}</p>
+    <p class="key-note" data-for="found">{e(_("Panel nie wie, czy ta kopia jest pełna - po "
+            "odtworzeniu powie, czy wrócił klucz serwera i czy pliki osób zadziałają."))}</p>
+    <p class="key-note warn" data-for="other">{e(_("Ta kopia nie ma klucza serwera. Jeśli to Pi ma "
+            "inny klucz (np. nowy system), każda osoba będzie potrzebować nowego pliku - panel "
+            "powie to zaraz po odtworzeniu."))}</p>
+    <label class="restore-secret">{e(_("Hasło kopii"))}
+      <input type="password" name="passphrase" autocomplete="off" placeholder="{e(hint)}"></label>
+    <label class="check"><input type="checkbox" name="with_users" value="1">
+      {e(_("Logowanie starym hasłem (konto panelu z kopii)"))}</label>
+    <p class="muted small">{e(_("Zaznacz na nowym systemie: wraca Twoje dawne konto panelu (login, "
+                               "hasło, kod z aplikacji). Panel Cię wyloguje - zaloguj się starym "
+                               "hasłem. Bez zaznaczenia zostaje obecne konto."))}</p>
+    <div class="wg-dialog-actions">
+      <button type="button" data-close>{e(_("Anuluj"))}</button>
+      <button class="danger solid">{e(_("Odtwórz kopię"))}</button>
+    </div>
+  </form>
+</dialog>"""
 
 
 def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
-                 alerts: int = 0, nas_files: list | None = None) -> str:
+                 alerts: int = 0, scan: dict | None = None, total: int | None = None) -> str:
     csrf = _csrf(sess)
-    no_crypt = e(_("puste = bez szyfrowania"))
-    items = []
-    for row in rows:
-        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
-        badge = ('<span class="badge ok">ok</span>' if row["ok"]
-                 else '<span class="badge dead">' + _("błąd") + '</span>')
-        size = f'{row["bytes"] / 1024:.1f} KiB'
-        lock = _("zaszyfrowana") if row["encrypted"] else _("jawna")
-        if row["verified_at"]:
-            when = time.strftime("%m-%d %H:%M", time.localtime(row["verified_at"]))
-            check = (f'<span class="badge ok">{_("zgodna")}</span> <span class="muted">{e(when)}</span>'
-                     if row["verify_ok"] else
-                     f'<span class="badge dead">{_("NIEZGODNA")}</span> '
-                     f'<span class="muted">{e(i18n.audit_detail(row["verify_detail"]))}</span>')
-        elif row["ok"]:
-            check = '<span class="muted">' + _("niesprawdzona") + '</span>'
-        else:
-            check = ""
-        digest = (f'<code title="{e(row["sha256"])}">{e(row["sha256"][:12])}</code>'
-                  if row["sha256"] else "")
-        failed = ("" if row["ok"] else " data-failed") + (
-            ' data-where="smb"' if (row["path"] or "").startswith("//") else ' data-where="local"')
-        pre_restore = ('<span class="badge warn" title="' + e(_(
-            "Zapisana automatycznie tuż przed odtworzeniem - pozwala wrócić do poprzedniego stanu, "
-            "jeśli odtworzenie okazało się pomyłką. Gdy wszystko się zgadza, możesz ją usunąć.")) +
-            '">' + _("sprzed odtworzenia") + '</span> ') if _pre_restore(row) else ""
-        items.append(f"""
-          <tr{failed}><td class="pick"><input type="checkbox" name="id" value="{row['id']}"
-                  form="backup-delete" aria-label="{e(_("zaznacz kopię"))}"></td>
-              <td class="muted">{e(stamp)}</td><td>{badge}</td>
-              <td>{e(row['target'])}</td>
-              <td>{pre_restore}<code>{e(row['path'] or '—')}</code></td>
-              <td class="muted">{e(size)} · {e(lock)}</td>
-              <td>{digest}</td>
-              <td>{check}</td></tr>""")
-    if not items:
-        items.append('<tr><td colspan="8" class="muted">' + _("Jeszcze żadnej kopii.") + '</td></tr>')
-
-    options = []
-    known = set()
-    for row in rows:
-        if not row["ok"]:
-            continue
-        known.add(os.path.basename(row["path"]))
-        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
-        where = "NAS" if row["target"] == "smb" else _("karta SD")
-        state = ("" if not row["verified_at"] else
-                 (" · " + (_("zgodna") if row["verify_ok"] else _("NIEZGODNA"))))
-        note = " · " + _("stan sprzed odtworzenia") if _pre_restore(row) else ""
-        options.append(f'<option value="id:{row["id"]}">{e(when)} · {where}{state}{note}</option>')
-    for name in files:
-        if name not in known:  # np. plik wgrany recznie po awarii karty
-            options.append(f'<option value="file:{e(name)}">{e(name)} · {_("plik na karcie")}</option>')
-    if nas_files:
-        for name in nas_files:
-            if name not in known:
-                options.append(f'<option value="smb:{e(name)}">{e(name)} · {_("na NAS")}</option>')
-    restore_options = "".join(options) or '<option value="">' + _("brak kopii") + '</option>'
     target = cfg.get("backup_target", "local")
     enabled = cfg.get("backup_enabled") == "1"
-    restore_ask = ask(_("Odtworzyć kopię?"),
-                      _("Odtworzenie zastąpi wszystkie peery, tiery i reguły w panelu. Obecny stan "
-                        "zostanie najpierw zapisany jako osobna kopia."), _("Odtwórz kopię"))
-    # dwa przyciski - kazdy robi dokladnie to, co mowi; wyrozniony ten, gdzie ida kopie automatyczne
-    local_css = ' class="primary"' if target != "smb" else ""
-    smb_css = ' class="primary"' if target == "smb" else ""
-    plain_ask = "" if cfg.get("backup_passphrase") else ask(
+    secret = cfg.get("backup_passphrase", "")
+    items = backup_items(rows, files, scan)
+    lines = [backup_row(item) for item in items]
+    if not lines:
+        lines.append('<tr><td colspan="5" class="muted">' + e(_(
+            "Panel nie zna jeszcze żadnej kopii. Na nowym systemie wpisz dane NAS w "
+            "ustawieniach na dole strony i kliknij „Odśwież listę z NAS”.")) + '</td></tr>')
+    total = len(rows) if total is None else total
+    more = ""
+    if total > len(rows):
+        more = (f'<p><a href="/backups?all=1#lista">' +
+                e(_("Pokaż wszystkie kopie ({n})", n=total)) + '</a></p>')
+
+    # "Zrob kopie teraz": trzy miejsca do wyboru, kazde robi dokladnie to, co mowi
+    plain_ask = "" if secret else ask(
         _("Wysłać kopię na NAS bez szyfrowania?"),
         _("Kopia zawiera klucze PSK wszystkich peerów. Bez hasła kopii trafi na udział jawnym "
-          "tekstem - ustaw hasło kopii w Harmonogramie i celu, żeby ją zaszyfrować."),
+          "tekstem - ustaw hasło kopii w ustawieniach kopii, żeby ją zaszyfrować."),
         _("Wyślij bez szyfrowania"))
-    auto_where = _("NAS") if target == "smb" else _("katalog na dysku")
-    auto_line = (_("Kopie automatyczne: codziennie o {time} → {where}.",
-                   time=e(cfg.get("backup_time", "03:30")), where=auto_where)
-                 if enabled else _("Kopie automatyczne są wyłączone - włączysz je w Harmonogramie i celu."))
-    nas_note = (_("znaleziono {n}, są na liście poniżej", n=len(nas_files)) if nas_files is not None
-                else _("przydaje się na nowym systemie, który nie ma jeszcze własnej historii"))
-    text_local = _("Zaznaczone kopie zostaną usunięte z karty razem z plikami .sha256. Tego nie da "
+    smb_set = bool((cfg.get("smb_host") or "").strip() and (cfg.get("smb_share") or "").strip())
+    smb_note = (_("Tylko na NAS - na Pi nic nie zostaje.") if smb_set
+                else _("Najpierw wpisz dane NAS w ustawieniach na dole strony."))
+    file_note = (_("Plik pobierze przeglądarka - pełna kopia, zaszyfrowana hasłem kopii. Panel go nie przechowuje.")
+                 if secret else
+                 _("Plik pobierze przeglądarka - kopia podstawowa, jawna. Panel go nie przechowuje."))
+
+    # lista: jedna akcja NAS (odswiezenie listy) i akcje na zaznaczonych
+    smb_ready = bool((cfg.get("smb_host") or "").strip() and (cfg.get("smb_share") or "").strip())
+    if scan:
+        scan_line = _("NAS sprawdzone {when}.", when=_stamp(scan["ts"]))
+    elif smb_ready:
+        scan_line = _("Kopie z NAS dojdą do listy po kliknięciu „Odśwież listę z NAS”.")
+    else:
+        scan_line = ""
+    scan_title = _("Panel pyta NAS tylko po kliknięciu - nigdy w tle.")
+    scan_button = (f'<button title="{e(scan_title)}">{e(_("Odśwież listę z NAS"))}</button>'
+                   if smb_ready else
+                   f'<button disabled title="{e(_("najpierw wpisz dane NAS w ustawieniach"))}">'
+                   f'{e(_("Odśwież listę z NAS"))}</button>')
+    text_local = _("Zaznaczone kopie zostaną usunięte z Pi razem z plikami .sha256. Tego nie da "
                    "się cofnąć - zostaw przynajmniej jedną zgodną kopię.")
-    text_smb = _("Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z karty, a kopie na "
+    text_smb = _("Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z Pi, a kopie na "
                  "NAS także z NAS. Tego nie da się cofnąć - zostaw przynajmniej jedną "
                  "zgodną kopię.")
     delete_ask = ask(_("Usunąć zaznaczone kopie?"), text_local, _("Usuń kopie")) + (
         f' data-text-local="{e(text_local)}" data-text-smb="{e(text_smb)}"'
-        f' data-detail="{e(_("Zaznaczone: {n} (z karty: {local}, z NAS: {smb}).", n="{n}", local="{local}", smb="{smb}"))}"')
-    heads = "<th></th>" + "".join(f"<th>{h}</th>" for h in (_("Kiedy"), _("Wynik"), _("Cel"), _("Plik"),
-                                               _("Rozmiar"), "SHA-256", _("Weryfikacja")))
+        f' data-detail="{e(_("Zaznaczone: {n} (na Pi: {local}, na NAS: {smb}).", n="{n}", local="{local}", smb="{smb}"))}"')
+    failed_button = (f'<button type="button" onclick="wgPickFailed()">{e(_("Zaznacz nieudane"))}</button>'
+                     if any(not item["ok"] for item in items) else "")
+    heads = ('<th class="pick"><input type="checkbox" data-pick-all aria-label="' +
+             e(_("zaznacz wszystkie")) + '"></th>' +
+             "".join(f"<th>{e(h)}</th>" for h in (_("Kiedy"), _("Gdzie"), _("Rodzaj"), _("Stan"))))
     body = f"""
       <div class="card">
-        <div class="head">
-          <h1>{_("Kopie zapasowe")}</h1>
-          <div>
-            <form method="post" action="/backups/verify" class="inline">
-              {csrf}
-              <button>{_("Sprawdź kopie")}</button>
-            </form>
-            <form method="post" action="/backups/run" class="inline">
-              {csrf}
-              <input type="hidden" name="target" value="local">
-              <button{local_css}>{_("Kopia lokalnie")}</button>
-            </form>
-            <form method="post" action="/backups/run" class="inline"{plain_ask}>
-              {csrf}
-              <input type="hidden" name="target" value="smb">
-              <button{smb_css}>{_("Kopia na NAS")}</button>
-            </form>
-          </div>
+        <h1>{e(_("Kopie zapasowe"))}</h1>
+        {backup_status(cfg, rows)}
+        <h3 class="now-title">{e(_("Zrób kopię teraz - gdzie?"))}</h3>
+        <div class="dest-grid">
+          <form method="post" action="/backups/run"{plain_ask}>
+            {csrf}<input type="hidden" name="target" value="smb">
+            <button class="dest"{'' if smb_set else ' disabled'}><strong>{e(_("Na NAS"))}</strong>
+              <span>{e(smb_note)}</span></button>
+          </form>
+          <form method="post" action="/backups/run">
+            {csrf}<input type="hidden" name="target" value="local">
+            <button class="dest"><strong>{e(_("Na Pi"))}</strong>
+              <span>{e(_("Tylko na tym Pi. Szybko, ale nie chroni przed awarią karty."))}</span></button>
+          </form>
+          <form method="post" action="/backups/export">
+            {csrf}<button class="dest"><strong>{e(_("Na ten komputer"))}</strong>
+              <span>{e(file_note)}</span></button>
+          </form>
         </div>
-        <p><strong>{auto_line}</strong></p>
-        <p class="muted">{_("Każda kopia dostaje sumę SHA-256 zapisaną w bazie i w pliku {file} obok "
-                            "kopii - da się ją sprawdzić także bez panelu: {command}. Weryfikacja "
-                            "pobiera plik z miejsca, w którym leży (także z NAS), i porównuje sumę.",
-                            file="<code>.sha256</code>", command="<code>" + _("sha256sum -c plik.sha256") + "</code>")}</p>
-        <p class="muted">{_("Kopia to cały stan panelu: ustawienia, tiery, peery, reguły i konta. Z niej "
-                            "odtworzysz panel na czystej karcie - {conf} i reguły iptables zostaną "
-                            "wygenerowane od nowa.", conf="<code>wg0.conf</code>")}</p>
-        <table class="stack"><thead><tr>{heads}</tr></thead>
-          <tbody>{''.join(items)}</tbody></table>
-        <form method="post" action="/backups/delete" id="backup-delete" class="actions"{delete_ask}>
-          {csrf}
-          <button type="button" onclick="wgPickFailed()">{_("Zaznacz nieudane")}</button>
-          <button class="danger">{_("Usuń zaznaczone")}</button>
-        </form>
-        <p class="muted">{_("„Trzymaj ostatnie” sprząta tylko katalog na karcie - kopie na NAS usuwasz tutaj.")}</p>
+        <details class="more">
+          <summary>{e(_("Pobierz na komputer z innym hasłem"))}</summary>
+          <form method="post" action="/backups/export" class="row">
+            {csrf}
+            <label>{e(_("Hasło do tego pliku"))}<input type="password" name="passphrase"
+                   autocomplete="off" required minlength="{export.WEAK_PASSPHRASE}"></label>
+            <button>{e(_("Pobierz pełną kopię"))}</button>
+          </form>
+        </details>
       </div>
 
-      <div class="card">
-        <h2>{_("Harmonogram i cel")}</h2>
-        <form method="post" action="/backups/settings" class="row">
+      <div class="card" id="lista">
+        <div class="head">
+          <h2>{e(_("Lista kopii"))}</h2>
+          <form method="post" action="/backups/scan" class="inline">{csrf}{scan_button}</form>
+        </div>
+        {f'<p class="muted scan-line">{e(scan_line)}</p>' if scan_line else ''}
+        <table class="stack backup-list"><thead><tr>{heads}</tr></thead>
+          <tbody>{''.join(lines)}</tbody></table>
+        {more}
+        <form method="post" action="/backups/verify" id="backup-pick" class="pick-bar">
           {csrf}
-          <label class="check" style="flex:1 1 100%">
-            <input type="checkbox" name="backup_enabled" value="1"{' checked' if enabled else ''}>
-            {_("Rób kopie automatycznie, codziennie")}</label>
-          <label>{_("O godzinie")}<input name="backup_time"
-                 value="{e(cfg.get('backup_time', '03:30'))}" placeholder="03:30"></label>
-          <label>{_("Trzymaj ostatnie")}<input name="backup_keep"
-                 value="{e(cfg.get('backup_keep', '14'))}"></label>
-          <label>{_("Cel")}<select name="backup_target">
-            <option value="local"{' selected' if target == 'local' else ''}>{_("katalog na dysku")}</option>
-            <option value="smb"{' selected' if target == 'smb' else ''}>{_("NAS przez SMB")}</option>
-          </select></label>
-          <label>{_("Katalog roboczy")}<input name="backup_dir"
-                 value="{e(cfg.get('backup_dir', ''))}"></label>
-          <label>{_("Hasło kopii")}<input type="password" name="backup_passphrase"
-                 value="{e(cfg.get('backup_passphrase', ''))}"
-                 placeholder="{no_crypt}"></label>
-          <label>{_("NAS: adres")}<input name="smb_host" value="{e(cfg.get('smb_host', ''))}"></label>
-          <label>{_("Udział")}<input name="smb_share" value="{e(cfg.get('smb_share', ''))}"></label>
-          <label>{_("Katalog na udziale")}<input name="smb_path"
-                 value="{e(cfg.get('smb_path', ''))}"></label>
-          <label>{_("Użytkownik")}<input name="smb_user" value="{e(cfg.get('smb_user', ''))}"></label>
-          <label>{_("Hasło")}<input type="password" name="smb_pass"
-                 value="{e(cfg.get('smb_pass', ''))}"></label>
-          <button class="primary">{_("Zapisz")}</button>
+          <span id="pick-count" class="muted" data-none="{e(_("Zaznacz kopie na liście"))}"
+                data-some="{e(_("Zaznaczone: {n}", n="{n}"))}">{e(_("Zaznacz kopie na liście"))}</span>
+          <button data-verify>{e(_("Sprawdź zaznaczone"))}</button>
+          <button type="button" data-restore onclick="wgRestoreOpen()"
+                  title="{e(_("zaznacz jedną kopię"))}">{e(_("Odtwórz zaznaczoną…"))}</button>
+          <button formaction="/backups/delete" class="danger" data-delete{delete_ask}>{e(_("Usuń zaznaczone"))}</button>
+          {failed_button}
         </form>
-        <p class="muted">{_("Kopia zawiera klucze PSK wszystkich peerów. Jeśli ma leżeć na udziale "
-                            "sieciowym, ustaw hasło - plik zostanie zaszyfrowany (ChaCha20 + HMAC, "
-                            "klucz z scrypt). Bez hasła trafi tam jawnym tekstem.")}</p>
+        {backup_legend()}
       </div>
 
-      <div class="card">
-        <h2>{_("Pobierz albo odtwórz")}</h2>
-        <form method="post" action="/backups/export" class="row">
+      <div class="card" id="ustawienia">
+        <h2>{e(_("Ustawienia kopii"))}</h2>
+        <form method="post" action="/backups/settings" class="settings">
           {csrf}
-          <label>{_("Hasło do pobieranego pliku")}<input type="password" name="passphrase"
-                 placeholder="{no_crypt}"></label>
-          <button>{_("Pobierz kopię")}</button>
+          <section class="set-row">
+            <div class="set-info">
+              <h3>{e(_("Harmonogram"))}</h3>
+              <p class="muted">{e(_("Kopia automatyczna raz na dobę, w miejsce wybrane obok. Przyciski „Zrób kopię teraz” na górze działają niezależnie od tego."))}</p>
+            </div>
+            <div class="set-fields">
+              <label class="check"><input type="checkbox" name="backup_enabled" value="1"{' checked' if enabled else ''}>
+                {e(_("Rób kopie automatycznie, codziennie"))}</label>
+              <div class="pair">
+                <label>{e(_("O godzinie"))}<input name="backup_time"
+                       value="{e(cfg.get('backup_time', '03:30'))}" placeholder="03:30"></label>
+                <label>{e(_("Dokąd"))}<select name="backup_target">
+                  <option value="smb"{' selected' if target == 'smb' else ''}>{e(_("tylko NAS"))}</option>
+                  <option value="local"{' selected' if target not in ('smb', 'both') else ''}>{e(_("tylko Pi"))}</option>
+                  <option value="both"{' selected' if target == 'both' else ''}>{e(_("NAS i Pi (dwie kopie)"))}</option>
+                </select></label>
+              </div>
+            </div>
+          </section>
+          <section class="set-row">
+            <div class="set-info">
+              <h3>{e(_("Szyfrowanie"))}</h3>
+              <p class="muted">{e(_("Z hasłem każda kopia jest pełna (klucz serwera, hasła, historia) i zaszyfrowana. Bez hasła - podstawowa i jawna. Co najmniej {n} znaków; trzymaj je w menedżerze haseł - bez niego kopii nie otworzysz.", n=export.WEAK_PASSPHRASE))}</p>
+            </div>
+            <div class="set-fields">
+              <label>{e(_("Hasło kopii"))}<input type="password" name="backup_passphrase"
+                     value="{e(secret)}" autocomplete="new-password"
+                     placeholder="{e(_("puste = kopie podstawowe, bez szyfrowania"))}"></label>
+            </div>
+          </section>
+          <section class="set-row">
+            <div class="set-info">
+              <h3>{e(_("NAS"))}</h3>
+              <p class="muted">{e(_("Udział SMB na kopie. Panel łączy się z nim tylko przy kopii i na przycisk - nigdy w tle, więc NAS może spać."))}</p>
+            </div>
+            <div class="set-fields">
+              <div class="pair trio">
+                <label>{e(_("Adres"))}<input name="smb_host" value="{e(cfg.get('smb_host', ''))}"
+                       placeholder="192.168.1.10"></label>
+                <label>{e(_("Udział"))}<input name="smb_share" value="{e(cfg.get('smb_share', ''))}"
+                       placeholder="backup"></label>
+                <label>{e(_("Katalog na udziale"))}<input name="smb_path"
+                       value="{e(cfg.get('smb_path', ''))}" placeholder="wg-panel"></label>
+              </div>
+              <div class="pair">
+                <label>{e(_("Użytkownik"))}<input name="smb_user" value="{e(cfg.get('smb_user', ''))}"
+                       autocomplete="off"></label>
+                <label>{e(_("Hasło"))}<input type="password" name="smb_pass"
+                       value="{e(cfg.get('smb_pass', ''))}" autocomplete="new-password"></label>
+              </div>
+            </div>
+          </section>
+          <section class="set-row">
+            <div class="set-info">
+              <h3>{e(_("Na Pi"))}</h3>
+              <p class="muted">{e(_("Tu leżą kopie robione na Pi. Kopia „tylko NAS” powstaje tu na chwilę i znika zaraz po wysłaniu. Na Pi panel trzyma najwyżej tyle ostatnich kopii, ile wpiszesz; kopii na NAS to nie dotyczy."))}</p>
+            </div>
+            <div class="set-fields">
+              <div class="pair">
+                <label>{e(_("Katalog kopii na Pi"))}<input name="backup_dir"
+                       value="{e(cfg.get('backup_dir', ''))}" placeholder="{e(export.STAGING)}"></label>
+                <label>{e(_("Na Pi trzymaj ostatnie"))}<input name="backup_keep" inputmode="numeric"
+                       value="{e(cfg.get('backup_keep', '14'))}"></label>
+              </div>
+            </div>
+          </section>
+          <div class="set-actions"><button class="primary">{e(_("Zapisz ustawienia"))}</button></div>
         </form>
-        <form method="post" action="/backups/restore" class="row"{restore_ask}>
-          {csrf}
-          <label>{_("Kopia")}<select name="source">{restore_options}</select></label>
-          <label>{_("Hasło")}<input type="password" name="passphrase"></label>
-          <label class="check"><input type="checkbox" name="with_users" value="1">
-            {_("Odtwórz także konta")}</label>
-          <button class="danger">{_("Odtwórz")}</button>
-        </form>
-        <p><a class="button" href="/backups?nas=1">{_("Pokaż też kopie leżące na NAS")}</a>
-           <span class="muted">- {nas_note}</span></p>
-        <p class="muted">{_("Kopie z NAS panel pobiera sam i przed odtworzeniem sprawdza ich sumę "
-                            "kontrolną - niezgodnej nie odtworzy. Tuż przed odtworzeniem zapisuje "
-                            "obecny stan jako osobną kopię, więc zawsze da się wrócić.")}</p>
-        <p class="muted">{_("Odtworzenie zmienia tylko bazę. Żeby trafiło na interfejs, zastosuj potem "
-                            "zmiany z listy peerów.")}</p>
-      </div>"""
+      </div>
+      {restore_dialog(cfg, csrf)}"""
     return page(_("Kopie zapasowe"), body, sess, flash=flash, error=error, alerts=alerts)
 
 
@@ -2170,6 +2614,7 @@ def traffic_chart(series: list[dict], width: int = 940, height: int = 190) -> st
     total_up = sum(p["rx"] for p in series)
     return f"""
       <div class="chart">
+        <div class="chart-scroll">
         <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img"
              aria-label="{e(_("Ruch godzinowy z ostatnich 7 dni"))}">
           <line x1="{pad_l}" x2="{width - pad_r}" y1="{mid:.1f}" y2="{mid:.1f}" class="axis-line"/>
@@ -2178,6 +2623,7 @@ def traffic_chart(series: list[dict], width: int = 940, height: int = 190) -> st
           <text x="{pad_l - 6}" y="{pad_t + 10}" class="axis" text-anchor="end">{e(_human(peak))}</text>
           <text x="{pad_l - 6}" y="{mid + 4:.1f}" class="axis" text-anchor="end">0</text>
         </svg>
+        </div>
         <div class="legend">
           <span><i class="sw sw-down"></i>{_("pobrane przez klienta")}: <strong>{e(_human(total_down))}</strong></span>
           <span><i class="sw sw-up"></i>{_("wysłane przez klienta")}: <strong>{e(_human(total_up))}</strong></span>

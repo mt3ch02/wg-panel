@@ -4,6 +4,12 @@ Kopia to pojedynczy JSON: ustawienia, tiery, peery, reguly i konta.
 Z tego pliku da sie odtworzyc panel na czystej karcie - wg0.conf i reguly
 iptables zostana wygenerowane od nowa przy pierwszym zastosowaniu zmian.
 
+Kopia z haslem jest PELNA: dochodza hasla (NAS, ntfy, e-mail), historia (ruch,
+handshake'i, dziennik, alerty) i tozsamosc Pi z helpera - klucz prywatny serwera i urzad
+certyfikacji HTTPS. Z pelnej kopii odtworzysz cale Pi: stare pliki osob dzialaja dalej,
+certyfikat na telefonach tez (install.sh --restore albo Kopie -> Odtworz).
+Bez hasla kopia jest podstawowa i jawna - bez kluczy i hasel.
+
 Cele kopii:
   local - katalog na dysku (moze byc punkt montowania udzialu z NAS)
   smb   - wysylka przez smbclient wprost na udzial NAS
@@ -19,7 +25,7 @@ import sqlite3
 import subprocess
 import time
 
-from . import cryptobox, db
+from . import cryptobox, db, i18n
 
 FORMAT_VERSION = 1
 SAFE_PATH = re.compile(r"^[A-Za-z0-9._/-]*$")
@@ -28,11 +34,16 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 # stan roboczy panelu - nie nalezy do konfiguracji i nie moze trafiac do migawek,
 # bo migawka siedzi w tej samej tabeli i zaczelaby zawierac sama siebie
 RUNTIME_SETTINGS = {
+    # klucz publiczny serwera odczytany z tego Pi - po odtworzeniu na nowym systemie (nowy klucz)
+    # stary wpisywal sie do plikow klientow i nikt nie mogl sie polaczyc
+    "server_pubkey",
     "applied_state", "applied_hash", "applied_fingerprint",
     "drift_findings", "drift_checked_at", "confirm_token", "rolled_back",
     # stan sprzed zastosowania, trzymany do potwierdzenia, i tryb potwierdzania tej zmiany
     "before_applied_state", "before_applied_hash", "before_applied_fingerprint",
     "confirm_auto", "confirm_since",
+    # ostatnie odswiezenie listy z NAS (przycisk) - inne Pi, inna lista
+    "smb_scan",
 }
 
 EXPORT_TABLES = {
@@ -44,15 +55,41 @@ EXPORT_TABLES = {
     "hosts": "SELECT * FROM hosts",
 }
 
-# tych ustawien nie wynosimy poza maszyne
+# tych ustawien nie wynosimy poza maszyne w kopii bez hasla
 SECRET_SETTINGS = {"smb_pass", "backup_passphrase", "alerts_token", "smtp_pass"}
 
+# historia - tylko w pelnej kopii; kolejnosc ma znaczenie (peer_stats wskazuje na peers)
+HISTORY_TABLES = ("traffic", "peer_stats", "peer_seen", "audit", "alerts", "backups")
+WEAK_PASSPHRASE = 12      # krotsze haslo kopii panel odradza (kopia zawiera klucz serwera)
+STAGING = "/var/lib/wg-panel/backups"
 
-def build(conn: sqlite3.Connection, include_secrets: bool = False) -> dict:
+
+def staging_dir(cfg: dict) -> str:
+    """Katalog roboczy kopii na Pi - tu powstaje kazda kopia, takze ta wysylana na NAS."""
+    return cfg.get("backup_dir") or STAGING
+
+
+def system_identity(conn: sqlite3.Connection) -> dict | None:
+    """Klucz serwera i urzad certyfikacji z helpera - do pelnej kopii. None, gdy helper
+    nie odpowiada (wtedy kopia jest pelna bez tozsamosci, co zapisujemy w opisie)."""
+    from . import helperclient, model
+    try:
+        result = helperclient.call("system_export", {"settings": model.settings_only(conn)},
+                                   timeout=30)
+    except Exception:  # noqa: BLE001
+        return None
+    return result if result.get("server_key") else None
+
+
+def build(conn: sqlite3.Connection, include_secrets: bool = False,
+          history: bool = False) -> dict:
     out: dict = {
         "format": FORMAT_VERSION,
         "created_at": int(time.time()),
         "created_by": "wg-panel",
+        # klucz PUBLICZNY serwera z chwili kopii - po odtworzeniu panel porownuje go z kluczem
+        # nowego Pi i mowi wprost, czy stare pliki osob zadzialaja
+        "server_pubkey": db.settings(conn).get("server_pubkey", ""),
     }
     for name, query in EXPORT_TABLES.items():
         rows = [dict(row) for row in conn.execute(query)]
@@ -64,14 +101,38 @@ def build(conn: sqlite3.Connection, include_secrets: bool = False) -> dict:
         out[name] = rows
     counts = {name: len(out[name]) for name in EXPORT_TABLES}
     out["counts"] = counts
+    if history:
+        out["history"] = {name: [dict(row) for row in conn.execute(f"SELECT * FROM {name}")]
+                          for name in HISTORY_TABLES}
     return out
 
 
 def serialize(conn: sqlite3.Connection, passphrase: str = "") -> tuple[bytes, bool]:
+    """Kopia podstawowa (migawki przed odtworzeniem i przed zmianami)."""
     payload = json.dumps(build(conn), ensure_ascii=False, indent=1).encode("utf8")
     if passphrase:
         return cryptobox.encrypt(payload, passphrase), True
     return payload, False
+
+
+def pack(conn: sqlite3.Connection, passphrase: str = "") -> tuple[bytes, bool, str]:
+    """Kopia do wyslania: z haslem pelna (zaszyfrowana), bez hasla podstawowa.
+    Zwraca (plik, zaszyfrowana, rodzaj): rodzaj = "full" | "full-nokey" | "basic"."""
+    if not passphrase:
+        blob, _encrypted = serialize(conn)
+        return blob, False, "basic"
+    data = build(conn, include_secrets=True, history=True)
+    data["full"] = True
+    system = system_identity(conn)
+    if system:
+        data["system"] = {"server_key": system["server_key"], "ca": system.get("ca")}
+    payload = json.dumps(data, ensure_ascii=False, indent=1).encode("utf8")
+    return cryptobox.encrypt(payload, passphrase), True, "full" if system else "full-nokey"
+
+
+KIND_DETAIL = {"full": "pełna kopia, zaszyfrowana",
+               "full-nokey": "pełna kopia bez klucza serwera (helper nie odpowiadał), zaszyfrowana",
+               "basic": "bez szyfrowania"}
 
 
 def filename(encrypted: bool, moment: float | None = None) -> str:
@@ -156,6 +217,12 @@ def restore(conn: sqlite3.Connection, data: dict, with_users: bool = False) -> d
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (row["key"], row["value"]),
             )
+        restored = {row["key"]: row["value"] for row in data.get("settings", [])}
+        if "audit_days" in restored and "alerts_days" not in restored:
+            # kopia sprzed rozdzielenia: alerty mialy ten sam limit co dziennik
+            conn.execute("INSERT INTO settings(key, value) VALUES ('alerts_days', ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (restored["audit_days"],))
         if with_users:
             conn.execute("DELETE FROM sessions")
             conn.execute("DELETE FROM users")
@@ -169,11 +236,42 @@ def restore(conn: sqlite3.Connection, data: dict, with_users: bool = False) -> d
                 )
         conn.execute("DELETE FROM settings WHERE key = 'applied_hash'")
         conn.execute("DELETE FROM settings WHERE key = 'applied_fingerprint'")
+        history = data.get("history") or {}
+        for name in HISTORY_TABLES:
+            if name not in history:
+                continue
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({name})")}
+            if name == "backups":
+                # lista kopii: dokladamy te z kopii, a zostawiamy biezace (w tym migawke
+                # sprzed tego odtworzenia - musi dac sie do niej wrocic)
+                present = {row[0] for row in conn.execute("SELECT path FROM backups")}
+                columns.discard("id")
+            else:
+                present = set()
+                conn.execute(f"DELETE FROM {name}")
+            for row in history[name]:
+                if name == "backups" and row.get("path") in present:
+                    continue
+                keys = [k for k in row if k in columns]
+                if keys:
+                    conn.execute(f"INSERT INTO {name}({', '.join(keys)}) VALUES "
+                                 f"({', '.join('?' for _k in keys)})", [row[k] for k in keys])
 
     db.normalize_legacy(conn)      # kopia ze starszej wersji: odcieci peerzy, alias $NAS
     for name in ("tiers", "peers", "rules", "hosts"):
         summary[name] = len(data.get(name, []))
+    summary["full"] = bool(data.get("full"))
     return summary
+
+
+def backup_pubkey(data: dict) -> str:
+    """Klucz publiczny serwera zapisany w kopii (nowe kopie: pole, starsze: w ustawieniach)."""
+    if data.get("server_pubkey"):
+        return data["server_pubkey"]
+    for row in data.get("settings", []):
+        if row.get("key") == "server_pubkey":
+            return row.get("value") or ""
+    return ""
 
 
 # --------------------------------------------------------------------------
@@ -184,20 +282,31 @@ def sha256(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+# dokad ida kopie: smb - tylko NAS (plik na Pi tylko na czas wysylki), local - tylko Pi,
+# both - NAS i Pi (dwie kopie)
+TARGETS = ("smb", "local", "both")
+
+
 def run(conn: sqlite3.Connection, actor: str = "harmonogram", target: str | None = None) -> dict:
     """Robi kopie zgodnie z ustawieniami, liczy sume kontrolna i od razu ja sprawdza.
 
-    target nadpisuje cel z ustawien dla tej jednej kopii (przyciski "Kopia lokalnie" / "Kopia na NAS"),
-    bez zmiany celu kopii automatycznych."""
+    target nadpisuje cel z ustawien dla tej jednej kopii (przyciski "Na NAS" / "Na Pi"),
+    bez zmiany celu kopii automatycznych. Kopia "tylko NAS" nie zostawia nic na Pi."""
     cfg = db.settings(conn)
-    blob, encrypted = serialize(conn, cfg.get("backup_passphrase", ""))
+    blob, encrypted, kind = pack(conn, cfg.get("backup_passphrase", ""))
     name = filename(encrypted)
     digest = sha256(blob)
-    staging = cfg.get("backup_dir") or "/var/lib/wg-panel/backups"
+    staging = staging_dir(cfg)
     target = target or cfg.get("backup_target", "local")
+    if target not in TARGETS:
+        target = "local"
+    remote = target in ("smb", "both")
+    keep_local = target in ("local", "both")
 
-    record = {"ts": int(time.time()), "target": target, "path": "", "bytes": len(blob),
-              "encrypted": int(encrypted), "ok": 0, "detail": "", "sha256": digest}
+    record = {"ts": int(time.time()), "target": "smb" if remote else "local", "path": "",
+              "bytes": len(blob), "encrypted": int(encrypted), "ok": 0, "detail": "",
+              "sha256": digest}
+    local_path = sidecar = ""
     try:
         os.makedirs(staging, exist_ok=True)
         try:
@@ -207,29 +316,46 @@ def run(conn: sqlite3.Connection, actor: str = "harmonogram", target: str | None
         except OSError:
             pass             # katalog innego konta - prawa nadal instalator
         local_path = os.path.join(staging, name)
-        if os.path.exists(local_path):  # dwie kopie w tej samej sekundzie
+
+        def taken(candidate: str) -> bool:
+            # dwie kopie w tej samej sekundzie; kopia "tylko NAS" nie zostawia pliku na Pi,
+            # wiec patrzymy tez w historie - inaczej druga nadpisalaby pierwsza na NAS
+            return (os.path.exists(os.path.join(staging, candidate)) or conn.execute(
+                "SELECT 1 FROM backups WHERE path = ? OR path LIKE ?",
+                (candidate, "%/" + candidate)).fetchone() is not None)
+        if taken(name):
             stem, _, suffix = name.partition(".")
             counter = 1
-            while os.path.exists(local_path):
+            while taken(name):
                 name = f"{stem}-{counter}.{suffix}"
-                local_path = os.path.join(staging, name)
                 counter += 1
+            local_path = os.path.join(staging, name)
         with open(local_path, "wb") as handle:
             handle.write(blob)
         os.chmod(local_path, 0o640)
         sidecar = write_sidecar(local_path, name, digest)
         record["path"] = local_path
 
-        if target == "smb":
+        if remote:
             record["path"] = upload_smb(cfg, local_path, name)
             upload_smb(cfg, sidecar, name + ".sha256")
         record["ok"] = 1
-        record["detail"] = "zaszyfrowana" if encrypted else "bez szyfrowania"
+        record["detail"] = KIND_DETAIL[kind]
     except PermissionError:
         # np. wgctl uruchomione przez czlonka grupy przy prawach z wczesniejszej wersji
         record["detail"] = f"brak dostepu do katalogu kopii {staging} - zainstaluj panel ponownie"
     except Exception as exc:  # noqa: BLE001
         record["detail"] = str(exc)[:400]
+    if not keep_local:
+        # "tylko NAS": plik na Pi byl tylko do wysylki - takze gdy wysylka sie nie udala
+        for victim in (local_path, sidecar):
+            if victim:
+                try:
+                    os.remove(victim)
+                except OSError:
+                    pass
+        if not record["ok"]:
+            record["path"] = ""
 
     with conn:
         cursor = conn.execute(
@@ -241,10 +367,31 @@ def run(conn: sqlite3.Connection, actor: str = "harmonogram", target: str | None
     record["id"] = cursor.lastrowid
     db.log(conn, actor, "backup.ok" if record["ok"] else "backup.failed", record["detail"])
     prune(cfg, staging)
+    if record["ok"] and target == "smb" and cfg.get("backup_target") == "smb":
+        drop_working_copies(conn, cfg)        # wybrane "tylko NAS" - stare kopie z Pi znikaja
 
     if record["ok"] and cfg.get("backup_verify", "1") == "1":
         record["verify"] = verify(conn, record["id"])
     return record
+
+
+def drop_working_copies(conn: sqlite3.Connection, cfg: dict) -> int:
+    """Ustawione "tylko NAS": kopie robocze na Pi kopii, ktore leza na NAS i przeszly
+    weryfikacje, sa zbedne (starsza wersja zostawiala je zawsze) - usuwamy je z Pi. Kopie
+    niesprawdzone albo niezgodne zostaja, wpisy na liscie tez."""
+    removed = 0
+    for row in conn.execute("SELECT * FROM backups WHERE ok = 1 AND verify_ok = 1 "
+                            "AND path LIKE '//%'"):
+        local = local_copy(cfg, row)
+        if not local:
+            continue
+        for victim in (local, local + ".sha256"):
+            try:
+                os.remove(victim)
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def write_sidecar(local_path: str, name: str, digest: str) -> str:
@@ -256,10 +403,30 @@ def write_sidecar(local_path: str, name: str, digest: str) -> str:
     return sidecar
 
 
-def fetch(cfg: dict, record) -> bytes:
-    """Pobiera plik kopii z miejsca, w ktorym faktycznie lezy."""
+def local_copy(cfg: dict, record) -> str:
+    """Kopia robocza kopii z NAS w katalogu na Pi (zostaje tam ostatnich "trzymaj") -
+    sciezka albo "" gdy juz jej nie ma."""
+    path = record["path"] or ""
+    if not path.startswith("//"):
+        return ""
+    candidate = os.path.join(staging_dir(cfg), path.rsplit("/", 1)[-1])
+    return candidate if os.path.isfile(candidate) else ""
+
+
+def fetch(cfg: dict, record, prefer_local: bool = False) -> bytes:
+    """Pobiera plik kopii z miejsca, w ktorym faktycznie lezy.
+
+    prefer_local (odtwarzanie): kopia z NAS, ktora ma jeszcze kopie robocza na Pi, jest
+    czytana z Pi - NAS nie trzeba budzic. Tylko gdy suma sie zgadza; inaczej NAS.
+    Weryfikacja zawsze siega tam, gdzie kopia ma lezec (NAS) - po to jest."""
     path = record["path"]
     if record["target"] == "smb" and path.startswith("//"):
+        local = local_copy(cfg, record) if prefer_local else ""
+        if local:
+            with open(local, "rb") as handle:
+                blob = handle.read()
+            if record["sha256"] and sha256(blob) == record["sha256"]:
+                return blob
         name = path.rsplit("/", 1)[-1]
         return download_smb(cfg, name)
     with open(path, "rb") as handle:
@@ -303,9 +470,22 @@ def verify(conn: sqlite3.Connection, backup_id: int) -> dict:
     if not result["ok"]:
         from . import notify
         notify.raise_alert(conn, "backup", f"weryfikacja kopii {backup_id}",
-                           f"Kopia #{backup_id} nie przeszla weryfikacji: {result['detail']}",
+                           i18n.pl(i18n.ALERTS["verify_failed"], n=backup_id,
+                                   error=result["detail"]),
                            severity="alarm")
     return result
+
+
+def verify_many(conn: sqlite3.Connection, ids: list) -> list[dict]:
+    """Weryfikacja zaznaczonych kopii. Nieudane (bez pliku) pomijamy - nie ma czego sprawdzac,
+    a weryfikacja takiej podnioslaby alarm."""
+    out = []
+    for backup_id in ids:
+        row = conn.execute("SELECT id FROM backups WHERE id = ? AND ok = 1",
+                           (backup_id,)).fetchone()
+        if row is not None:
+            out.append(dict(verify(conn, row["id"]), id=row["id"]))
+    return out
 
 
 def verify_recent(conn: sqlite3.Connection, count: int = 3) -> list[dict]:
@@ -429,6 +609,34 @@ def delete_smb(cfg: dict, name: str) -> bool:
     return True
 
 
+def adopt_smb(conn: sqlite3.Connection, names: list) -> int:
+    """Kopie lezace na NAS, ktorych panel nie zna (np. zrobione przed reinstalacja),
+    dopisuje do historii - wtedy da sie je sprawdzic i usunac tak jak wlasne.
+    Wola to tylko przycisk "Odswiez liste z NAS" - panel sam NAS nie odpytuje."""
+    cfg = db.settings(conn)
+    host = (cfg.get("smb_host") or "").strip()
+    share = (cfg.get("smb_share") or "").strip()
+    folder = (cfg.get("smb_path") or "").strip().strip("/")
+    prefix = f"//{host}/{share}/" + (f"{folder}/" if folder else "")
+    known = {os.path.basename(row[0] or "") for row in conn.execute("SELECT path FROM backups")}
+    added = 0
+    for name in names:
+        if name in known or not is_backup_file(name):
+            continue
+        try:
+            digest = download_smb(cfg, name + ".sha256").decode().split()[0]
+        except (ValueError, IndexError, UnicodeDecodeError):
+            digest = ""
+        moment = _stamp(name) or int(time.time())
+        with conn:
+            conn.execute(
+                """INSERT INTO backups(ts, target, path, bytes, encrypted, ok, detail, sha256)
+                   VALUES (?, 'smb', ?, 0, ?, 1, 'znaleziona na NAS', ?)""",
+                (moment, prefix + name, int(name.endswith(".enc")), digest))
+        added += 1
+    return added
+
+
 def delete_backups(conn: sqlite3.Connection, ids: list) -> dict:
     """Usuwa wybrane kopie: pliki (z .sha256) na karcie i na NAS, potem wpis w historii.
 
@@ -437,7 +645,7 @@ def delete_backups(conn: sqlite3.Connection, ids: list) -> dict:
     pod adresem z biezacych ustawien.
     """
     cfg = db.settings(conn)
-    staging = os.path.realpath(cfg.get("backup_dir") or "/var/lib/wg-panel/backups")
+    staging = os.path.realpath(staging_dir(cfg))
     host = (cfg.get("smb_host") or "").strip()
     share = (cfg.get("smb_share") or "").strip()
     folder = (cfg.get("smb_path") or "").strip().strip("/")
@@ -512,21 +720,92 @@ def is_backup_file(name: str) -> bool:
 
 
 def local_files(cfg: dict) -> list[str]:
-    directory = cfg.get("backup_dir") or ""
-    if not os.path.isdir(directory):
+    directory = staging_dir(cfg)
+    try:
+        names = os.listdir(directory)
+    except OSError:
         return []
-    return sorted((f for f in os.listdir(directory) if is_backup_file(f)), reverse=True)
+    return sorted((f for f in names if is_backup_file(f)), reverse=True)
+
+
+def _stamp(name: str) -> int:
+    """Czas z nazwy pliku kopii (wg-panel-RRRRMMDD-GGMMSS...) - 0, gdy nazwa inna."""
+    match = re.search(r"wg-panel-(\d{8})-(\d{6})", name)
+    try:
+        return int(time.mktime(time.strptime("".join(match.groups()), "%Y%m%d%H%M%S")))
+    except (AttributeError, ValueError):
+        return 0
+
+
+def adopt_local(conn: sqlite3.Connection) -> int:
+    """Pliki kopii w katalogu roboczym, ktorych panel nie zna (np. skopiowane recznie na nowy
+    system), dopisuje do historii - lista kopii jest wtedy jedna i wszystko na niej da sie
+    sprawdzic, odtworzyc i usunac. Kopie robocze kopii z NAS maja te sama nazwe - znane."""
+    cfg = db.settings(conn)
+    staging = staging_dir(cfg)
+    known = {os.path.basename(row[0] or "") for row in conn.execute("SELECT path FROM backups")}
+    added = 0
+    for name in local_files(cfg):
+        if name in known:
+            continue
+        path = os.path.join(staging, name)
+        try:
+            size, moment = os.path.getsize(path), int(os.path.getmtime(path))
+        except OSError:
+            continue
+        try:
+            with open(path + ".sha256", encoding="utf8") as handle:
+                digest = handle.read().split()[0]
+        except (OSError, IndexError):
+            digest = ""          # bez sumy: da sie odtworzyc, weryfikacja powie, czego brakuje
+        with conn:
+            conn.execute(
+                """INSERT INTO backups(ts, target, path, bytes, encrypted, ok, detail, sha256)
+                   VALUES (?, 'local', ?, ?, ?, 1, 'znaleziona na Pi', ?)""",
+                (_stamp(name) or moment, path, size, int(name.endswith(".enc")), digest))
+        added += 1
+    return added
+
+
+def scan_smb(conn: sqlite3.Connection) -> dict:
+    """Przycisk "Odswiez liste z NAS": co lezy na NAS. Nieznane kopie trafiaja do
+    historii, wynik zostaje zapamietany (smb_scan) - lista pokazuje potem, ktorych plikow na
+    NAS juz nie ma, bez ponownego budzenia serwera. Panel sam NAS nie odpytuje."""
+    names = list_smb(db.settings(conn))
+    added = adopt_smb(conn, names)
+    db.set_setting(conn, "smb_scan", json.dumps({"ts": int(time.time()), "names": names}))
+    return {"count": len(names), "added": added}
+
+
+def last_scan(cfg: dict) -> dict | None:
+    try:
+        scan = json.loads(cfg.get("smb_scan") or "")
+    except ValueError:
+        return None
+    if not isinstance(scan, dict) or not isinstance(scan.get("names"), list):
+        return None
+    return {"ts": int(scan.get("ts") or 0), "names": [str(n) for n in scan["names"]]}
+
+
+SNAPSHOT_DETAIL = {"przed": "kopia stanu przed odtworzeniem",
+                   "przed-aktualizacja": "kopia stanu przed aktualizacją"}
 
 
 def snapshot_local(conn: sqlite3.Connection, actor: str, label: str = "przed") -> str:
-    """Kopia obecnego stanu tylko na karte - zeby odtworzenie dalo sie cofnac."""
+    """Kopia obecnego stanu tylko na Pi - zeby odtworzenie albo aktualizacje dalo sie cofnac."""
     cfg = db.settings(conn)
     blob, encrypted = serialize(conn, cfg.get("backup_passphrase", ""))
-    staging = cfg.get("backup_dir") or "/var/lib/wg-panel/backups"
+    staging = staging_dir(cfg)
     os.makedirs(staging, exist_ok=True)
     stem = time.strftime("wg-panel-%Y%m%d-%H%M%S")
-    name = f"{stem}-{label}.json" + (".enc" if encrypted else "")
+    suffix = ".json" + (".enc" if encrypted else "")
+    name = f"{stem}-{label}{suffix}"
     path = os.path.join(staging, name)
+    counter = 1
+    while os.path.exists(path):          # dwie migawki w tej samej sekundzie - nie nadpisujemy
+        name = f"{stem}-{label}-{counter}{suffix}"
+        path = os.path.join(staging, name)
+        counter += 1
     with open(path, "wb") as handle:
         handle.write(blob)
     os.chmod(path, 0o640)
@@ -537,7 +816,7 @@ def snapshot_local(conn: sqlite3.Connection, actor: str, label: str = "przed") -
             """INSERT INTO backups(ts, target, path, bytes, encrypted, ok, detail, sha256)
                VALUES (?, 'local', ?, ?, ?, 1, ?, ?)""",
             (int(time.time()), path, len(blob), int(encrypted),
-             "kopia stanu przed odtworzeniem", digest))
+             SNAPSHOT_DETAIL.get(label, SNAPSHOT_DETAIL["przed"]), digest))
     db.log(conn, actor, "backup.snapshot", name)
     return name
 
@@ -564,6 +843,43 @@ def list_smb(cfg: dict) -> list[str]:
     return sorted(set(names), reverse=True)
 
 
+def _smb_dirs(cfg: dict) -> list[str]:
+    """Katalogi w katalogu glownym udzialu - do podpowiedzi, gdy wpisany katalog nie istnieje."""
+    args, env, _path = _smb_base(cfg)
+    result = subprocess.run(args + ["-c", "ls"], capture_output=True, text=True, timeout=60,
+                            env=env)
+    found = []
+    for line in result.stdout.split("\n"):
+        parts = line.split()
+        if len(parts) >= 2 and "D" in parts[1] and parts[0] not in (".", ".."):
+            found.append(parts[0])
+    return sorted(found)
+
+
+def explain_smb(cfg: dict, exc: Exception) -> str:
+    """Blad smbclient po ludzku: co poprawic, a nie sam kod NT_STATUS."""
+    text = str(exc)
+    share, path = cfg.get("smb_share", ""), (cfg.get("smb_path") or "").strip("/")
+    if "LOGON_FAILURE" in text:
+        return (f"NAS odrzucił login albo hasło (użytkownik {cfg.get('smb_user') or '-'}) - "
+                "sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres Pi "
+                "zablokowany (np. automatyczna blokada adresów)")
+    if "BAD_NETWORK_NAME" in text:
+        return f"na NAS nie ma udziału {share}"
+    if "OBJECT_NAME_NOT_FOUND" in text or "OBJECT_PATH_NOT_FOUND" in text:
+        try:
+            dirs = _smb_dirs(cfg)
+        except Exception:  # noqa: BLE001
+            dirs = []
+        hint = f" - są tam: {', '.join(dirs)}" if dirs else ""
+        return f"na udziale {share} nie ma katalogu {path}{hint}"
+    if any(code in text for code in ("IO_TIMEOUT", "HOST_UNREACHABLE", "CONNECTION_REFUSED",
+                                     "Connection to", "NETWORK_UNREACHABLE")):
+        return (f"NAS nie odpowiada pod adresem {cfg.get('smb_host')} - sprawdź adres i czy "
+                "na NAS-ie jest włączone SMB")
+    return text
+
+
 def restore_from(conn: sqlite3.Connection, source: str, passphrase: str,
                  with_users: bool, actor: str) -> dict:
     """Odtwarza z kopii z historii ("id:N") albo z pliku w katalogu kopii ("file:nazwa").
@@ -578,7 +894,7 @@ def restore_from(conn: sqlite3.Connection, source: str, passphrase: str,
                            (int(value),)).fetchone()
         if row is None:
             raise ValueError("nie ma takiej kopii w historii")
-        blob = fetch(cfg, row)
+        blob = fetch(cfg, row, prefer_local=True)
         if row["sha256"] and sha256(blob) != row["sha256"]:
             raise ValueError("suma kontrolna sie nie zgadza - plik zmieniony albo uszkodzony, "
                              "nie odtwarzam")
@@ -594,7 +910,7 @@ def restore_from(conn: sqlite3.Connection, source: str, passphrase: str,
                              "nie odtwarzam")
         label = f"NAS: {value}"
     elif kind == "file" and value in local_files(cfg):
-        path = os.path.join(cfg.get("backup_dir", ""), value)
+        path = os.path.join(staging_dir(cfg), value)
         with open(path, "rb") as handle:
             blob = handle.read()
         sidecar = path + ".sha256"
@@ -610,4 +926,41 @@ def restore_from(conn: sqlite3.Connection, source: str, passphrase: str,
     safety = snapshot_local(conn, actor)
     summary = restore(conn, data, with_users=with_users)
     db.log(conn, actor, "backup.restore", f"{label}: {summary}; wczesniejszy stan w {safety}")
-    return dict(summary, source=label, safety=safety)
+    # tozsamosc (klucz serwera) idzie do wywolujacego, nigdy do dziennika
+    return dict(summary, source=label, safety=safety, system=data.get("system"),
+                backup_pubkey=backup_pubkey(data))
+
+
+def apply_identity(conn: sqlite3.Connection, summary: dict, call=None) -> dict:
+    """Po odtworzeniu: klucz serwera i urzad certyfikacji z pelnej kopii do helpera oraz
+    werdykt, czy dotychczasowe pliki osob zadzialaja.
+
+    verdict: restored (klucz z kopii jest na tym Pi) | same (kopia bez klucza, ale klucz sie
+    zgadza) | changed (inny klucz - kazda osoba potrzebuje nowego pliku) | unknown."""
+    from . import helperclient, model
+    call = call or helperclient.call
+    settings = model.settings_only(conn)
+    out = {"verdict": "unknown", "error": "", "ca": ""}
+    system = summary.get("system") or {}
+    if system.get("server_key"):
+        try:
+            result = call("system_import", {"settings": settings,
+                                            "server_key": system["server_key"],
+                                            "ca": system.get("ca")}, timeout=90)
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = str(exc)
+        else:
+            out["verdict"] = "restored"
+            out["ca"] = ("new" if result.get("ca_new")
+                         else "restored" if result.get("ca_restored") else "")
+    try:
+        live = call("server_pubkey", {"settings": settings}).get("pubkey", "")
+    except Exception:  # noqa: BLE001
+        live = ""
+    if live:
+        db.set_setting(conn, "server_pubkey", live)
+    if out["verdict"] != "restored":
+        old = summary.get("backup_pubkey") or ""
+        if old and live:
+            out["verdict"] = "same" if old == live else "changed"
+    return out

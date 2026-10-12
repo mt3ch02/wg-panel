@@ -16,7 +16,7 @@ zrobisz tutaj, widac w panelu i odwrotnie.
     wgctl rule list Marek
     wgctl suspend Marek / wgctl resume Marek
     wgctl rotate Marek
-    wgctl check Marek 192.168.1.50 445
+    wgctl check Marek 192.168.1.10 445
     wgctl diff
     wgctl apply [--no-safe] / wgctl confirm / wgctl rollback
     wgctl backup [--verify]
@@ -38,7 +38,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from panel import (db, export, helperclient, model as panel_model, qr, schedule,  # noqa: E402
-                   render, simulate, traffic, watchdog, wgcrypto)
+                   render, simulate, stats, traffic, watchdog, wgcrypto)
 
 DB_PATH = os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")
 
@@ -170,16 +170,18 @@ def cmd_list(args, conn) -> int:
     if args.json:
         print(json.dumps([dict(r) for r in rows], indent=2, ensure_ascii=False))
         return 0
+    # zapamietany handshake - po restarcie Pi jadro zna tylko te od startu
+    seen = stats.view(conn, {"peers": live})
     print(f'{BOLD}{"NAZWA":<22}{"IP":<13}{"TIER":<8}{"STAN":<11}'
           f'{"HANDSHAKE":<14}WAZNY DO{RESET}')
     for peer in rows:
-        stat = live.get(peer["pubkey"], {})
+        known = seen.get(peer["id"], {})
         expires = db.describe_expiry(peer)
         colour = {"active": GREEN, "suspended": YELLOW}.get(peer["state"], DIM)
         print(f'{peer["name"][:21]:<22}{peer["ip"]:<13}'
               f'{(peer["tier_name"] or "—")[:7]:<8}'
               f'{colour}{peer["state"]:<11}{RESET}'
-              f'{ago(stat.get("latest_handshake", 0)):<14}{expires}')
+              f'{ago(known.get("handshake", 0)):<14}{expires}')
     if live_error:
         print(f'{YELLOW}uwaga:{RESET} brak danych z interfejsu ({live_error}) - '
               f'kolumna HANDSHAKE jest pusta, a nie zerowa')
@@ -596,7 +598,7 @@ def cmd_backup(args, conn) -> int:
             print(f"  {mark} #{item['id']} {stamp}  {item['detail']}")
         return 1 if bad else 0
 
-    record = export.run(conn, actor="wgctl")
+    record = export.run(conn, actor="wgctl", target=args.target)
     if not record["ok"]:
         fail(record["detail"])
     print(f'{GREEN}kopia{RESET} {record["path"]}  '
@@ -688,6 +690,17 @@ def cmd_restore(args, conn) -> int:
     print(f'{GREEN}odtworzono{RESET} z {summary["source"]}: {summary["peers"]} peerow, '
           f'{summary["tiers"]} tierow, {summary["rules"]} regul')
     print(f'{DIM}poprzedni stan zapisany jako {summary["safety"]}{RESET}')
+    identity = export.apply_identity(conn, summary)
+    verdict = {
+        "restored": f"{GREEN}klucz serwera przywrocony z kopii{RESET} - dotychczasowe pliki osob dzialaja",
+        "same": f"{GREEN}klucz serwera zgodny z kopia{RESET} - dotychczasowe pliki osob dzialaja",
+        "changed": f"{RED}klucz serwera INNY niz w kopii{RESET} - kazda osoba potrzebuje nowego "
+                   "pliku (wgctl rotate NAZWA, potem wgctl apply)",
+    }.get(identity["verdict"])
+    if verdict:
+        print(verdict)
+    if identity["error"]:
+        print(f'{RED}klucz serwera nieprzywrocony:{RESET} {identity["error"]}')
     print("Zastosuj zmiany: wgctl diff && wgctl apply")
     return 0
 
@@ -731,6 +744,18 @@ def cmd_traffic(args, conn) -> int:
     print(f"{BOLD}{label}{RESET} - ostatnie {args.days} dni")
     print(f"  pobrane przez klienta: {traffic.human(tx)}")
     print(f"  wyslane przez klienta: {traffic.human(rx)}")
+    try:
+        live = helperclient.call("status", {"settings": panel_model.settings_only(conn)})
+    except helperclient.HelperError:
+        live = {}
+    seen = stats.view(conn, live)
+    chosen = [seen[peer["id"]]] if peer else list(seen.values())
+    since = min((s["since"] for s in chosen if s["since"]), default=0)
+    if since:
+        total_tx = sum(s["tx"] for s in chosen)
+        total_rx = sum(s["rx"] for s in chosen)
+        print(f"  lacznie od {time.strftime('%Y-%m-%d', time.localtime(since))}: "
+              f"pobrane {traffic.human(total_tx)}, wyslane {traffic.human(total_rx)}")
     per_day: dict[str, int] = {}
     for point in series:
         day = time.strftime("%a %d.%m", time.localtime(point["ts"]))
@@ -743,13 +768,13 @@ def cmd_traffic(args, conn) -> int:
 
 
 def cmd_export(args, conn) -> int:
-    blob, encrypted = export.serialize(conn, args.passphrase or "")
+    blob, encrypted, kind = export.pack(conn, args.passphrase or "")
     with open(args.path, "wb") as handle:
         handle.write(blob)
     os.chmod(args.path, 0o600)
     db.log(conn, "wgctl", "backup.export", args.path)
     print(f'{GREEN}zapisano{RESET} {args.path} '
-          f'({"zaszyfrowane" if encrypted else "JAWNYM TEKSTEM - zawiera PSK"})')
+          f'({export.KIND_DETAIL[kind] if encrypted else "JAWNYM TEKSTEM - zawiera PSK"})')
     return 0
 
 
@@ -828,6 +853,9 @@ def build_parser() -> argparse.ArgumentParser:
     backup.add_argument("--verify", action="store_true",
                         help="zamiast robic kopie, sprawdz sumy kontrolne ostatnich")
     backup.add_argument("--count", type=int, default=5)
+    backup.add_argument("--target", choices=["smb", "local", "both"], default=None,
+                        help="gdzie ta jedna kopia: smb (tylko NAS), local (tylko Pi), "
+                             "both (oba); domyslnie jak w ustawieniach")
 
     host = sub.add_parser("host", help="katalog hostow LAN")
     host.add_argument("host_action", choices=["list", "add", "del"])

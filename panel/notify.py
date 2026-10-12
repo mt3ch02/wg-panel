@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 from email.message import EmailMessage
 
-from . import db
+from . import db, i18n, stats
 
 
 def raise_alert(conn: sqlite3.Connection, kind: str, subject: str, message: str,
@@ -173,6 +173,8 @@ def check_peers(conn: sqlite3.Connection, status: dict, skip_endpoint=frozenset(
     watch_endpoint = cfg.get("alert_new_endpoint", "1") == "1"
 
     known = {row["pubkey"]: row for row in conn.execute("SELECT * FROM peer_seen")}
+    # po restarcie Pi jadro zna tylko handshake'i od startu - cisze liczymy od zapamietanego
+    remembered = stats.last_handshakes(conn, status) if dead_after else {}
     for peer in db.peers(conn):
         if peer["state"] != "active":
             continue
@@ -191,17 +193,17 @@ def check_peers(conn: sqlite3.Connection, status: dict, skip_endpoint=frozenset(
             if old_host != new_host:
                 raise_alert(
                     conn, "new_endpoint", peer["name"],
-                    f'{peer["name"]} ({peer["ip"]}) laczy sie z nowego adresu: '
-                    f'{new_host}, wczesniej {old_host}. Jesli to nie zmiana sieci '
-                    f'po jego stronie, rozwaz rotacje kluczy.',
+                    i18n.pl(i18n.ALERTS["new_endpoint"], name=peer["name"], ip=peer["ip"],
+                            new=new_host, old=old_host),
                     severity="alarm",
                 )
 
-        if dead_after and handshake and now - handshake > dead_after:
-            hours = (now - handshake) // 3600
+        last = max(handshake, remembered.get(peer["pubkey"], 0))
+        if dead_after and last and now - last > dead_after and stats.mark_dead(conn, peer, last):
+            hours = (now - last) // 3600
             raise_alert(
                 conn, "dead_peer", peer["name"],
-                f'{peer["name"]} ({peer["ip"]}) nie laczyl sie od {hours} h.',
+                i18n.pl(i18n.ALERTS["dead_peer"], name=peer["name"], ip=peer["ip"], n=hours),
                 severity="warn",
             )
 

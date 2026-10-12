@@ -113,9 +113,7 @@ def normalize_rule(raw: dict, cfg: dict) -> dict:
         if day not in WEEKDAYS:
             raise RuleError(f"zly dzien tygodnia: {day!r}")
 
-    comment = "".join(
-        ch for ch in str(raw.get("comment", "")) if ch.isalnum() or ch in " .:-_/"
-    )[:200]
+    comment = clean_comment(raw.get("comment", ""))
 
     return {
         "action": action,
@@ -129,6 +127,11 @@ def normalize_rule(raw: dict, cfg: dict) -> dict:
         "weekdays": days,
         "comment": comment,
     }
+
+
+def clean_comment(text) -> str:
+    """Komentarz reguly w postaci bezpiecznej dla iptables (bez cudzyslowow i znakow powloki)."""
+    return "".join(ch for ch in str(text) if ch.isalnum() or ch in " .:-_/")[:200]
 
 
 def _valid_hhmm(value: str) -> bool:
@@ -263,6 +266,9 @@ def _quote(arg: str) -> str:
     return f'"{arg}"' if " " in arg else arg
 
 
+DOCKER_CHAIN = "DOCKER-USER"  # lancuch Dockera na reguly uzytkownika
+
+
 def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquerade: bool):
     chain = cfg.get("chain", "WG-USERS")
     host_chain = chain + "-HOST"
@@ -273,6 +279,11 @@ def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquera
         f"PostUp = {tool} -N {host_chain} 2>/dev/null; {tool} -F {host_chain}",
         f"PostUp = {tool} -C FORWARD -i {iface} -j {chain} 2>/dev/null || "
         f"{tool} -I FORWARD 1 -i {iface} -j {chain}",
+        # Docker przy starcie wstawia swoje skoki na sama gore FORWARD; DOCKER-USER to lancuch,
+        # ktory Docker przepuszcza pierwszy i ktorego nie czysci - tam nasz skok zostaje pierwszy
+        f"PostUp = if command -v dockerd >/dev/null; then {tool} -N {DOCKER_CHAIN} 2>/dev/null; "
+        f"{tool} -C {DOCKER_CHAIN} -i {iface} -j {chain} 2>/dev/null || "
+        f"{tool} -I {DOCKER_CHAIN} 1 -i {iface} -j {chain}; fi",
         f"PostUp = {tool} -C FORWARD -o {iface} -m conntrack --ctstate RELATED,ESTABLISHED "
         f"-j ACCEPT 2>/dev/null || {tool} -I FORWARD 2 -o {iface} -m conntrack "
         f"--ctstate RELATED,ESTABLISHED -j ACCEPT",
@@ -287,6 +298,7 @@ def _hook_lines(tool: str, cfg: dict, rules_path: str, nat_source: str, masquera
             f"-j MASQUERADE")
     down = [
         f"PostDown = {tool} -D FORWARD -i {iface} -j {chain} 2>/dev/null; "
+        f"{tool} -D {DOCKER_CHAIN} -i {iface} -j {chain} 2>/dev/null; "
         f"{tool} -F {chain}; {tool} -X {chain} 2>/dev/null",
         f"PostDown = {tool} -D INPUT -i {iface} -j {host_chain} 2>/dev/null; "
         f"{tool} -F {host_chain}; {tool} -X {host_chain} 2>/dev/null",

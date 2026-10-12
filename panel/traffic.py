@@ -13,7 +13,7 @@ import sqlite3
 import statistics
 import time
 
-from . import db, notify
+from . import db, i18n, notify
 
 HOUR = 3600
 KEEP_DAYS = 8
@@ -102,9 +102,8 @@ def detect_anomalies(conn: sqlite3.Connection, now: int | None = None) -> list[s
             found.append(peer["name"])
             notify.raise_alert(
                 conn, "traffic_anomaly", peer["name"],
-                f'{peer["name"]} ({peer["ip"]}): {mb:.0f} MB w ciagu godziny, '
-                f'okolo {current / max(typical, 1):.0f}x wiecej niz zwykle. '
-                f'Jesli to nie on, sprawdz urzadzenie albo zrob rotacje kluczy.',
+                i18n.pl(i18n.ALERTS["traffic"], name=peer["name"], ip=peer["ip"],
+                        mb=f"{mb:.0f}", x=f"{current / max(typical, 1):.0f}"),
                 severity="warn",
             )
     return found

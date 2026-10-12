@@ -4,6 +4,7 @@ idzie przez gniazdo do helpera.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import ipaddress
 import http.cookies
@@ -25,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from panel import i18n  # noqa: E402
 from panel.i18n import _  # noqa: E402
 from panel import (auth, db, dual, export, helperclient, import_conf, model,  # noqa: E402
-                   notify, qr,
+                   notify, qr, stats,
                    render, scheduler, simulate, traffic, ui, wgcrypto)
 
 DB_PATH = os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")
@@ -442,6 +443,7 @@ def get_dashboard(req: Request) -> Response:
         discard_enough=discard_enough,
         diff_parts=diff_parts,
         dual_use=dual.incidents(CONN),
+        seen=stats.view(CONN, status),
     ))
     total = sum(parts.values())
     if total > 1.0:
@@ -509,13 +511,17 @@ def get_peer(req: Request, peer_id: str) -> Response:
     stat = (status or {}).get("peers", {}).get(peer["pubkey"], {})
     conf, route = model.client_conf(CONN, peer)
     # sam obrazek dociaga sie osobno - inaczej strona czekalaby na kodowanie QR
-    qr_svg = (f'<img src="/peers/{peer["id"]}/qr.svg" alt="{ui.e(_("kod QR z konfiguracją"))}" '
+    # odcisk klucza i klucza serwera w adresie: po rotacji albo zmianie serwera przegladarka
+    # nie moze pokazac starego obrazka z pamieci (pokazywala - i nowy plik "nie dzialal")
+    version = hashlib.sha256(conf.encode()).hexdigest()[:12]
+    qr_svg = (f'<img src="/peers/{peer["id"]}/qr.svg?v={version}" alt="{ui.e(_("kod QR z konfiguracją"))}" '
               f'width="260" height="260" loading="lazy">') if peer["privkey"] else ""
     return Response(ui.peer_detail(
         req.sess, cfg, peer, db.rules_for(CONN, peer["id"]), db.tiers(CONN),
         conf, qr_svg, stat, req.query.get("link", ""), req.query.get("msg", ""),
         alerts=alert_count(CONN), expiry_text=db.describe_expiry(peer),
         dual_use=dual.incidents(CONN).get(peer["id"]),
+        seen=stats.view(CONN, status).get(peer["id"]),
         warning=db.expiry_warning(peer, int(cfg.get("expiry_warn_days", "3") or 0)),
         chart=traffic.hourly(CONN, peer["pubkey"], 7),
         route=route, issued=model.issued_state(peer, route),
@@ -662,7 +668,7 @@ def get_peer_qr(req: Request, peer_id: str) -> Response:
         return Response("", 404)
     conf, _unused = model.client_conf(CONN, peer)
     return Response(qr.svg(conf), content_type="image/svg+xml; charset=utf-8",
-                    headers=[("Cache-Control", "private, max-age=60")])
+                    headers=[("Cache-Control", "no-store")])
 
 
 @route("GET", r"/peers/(\d+)/config")
@@ -1074,10 +1080,24 @@ def get_simulator(req: Request) -> Response:
 # alerty
 # --------------------------------------------------------------------------
 
+def page_number(req: Request) -> int:
+    value = req.query.get("page", "1")
+    return max(1, min(int(value), 10000)) if value.isdigit() else 1
+
+
+ALERTS_PER_PAGE = 50
+AUDIT_PER_PAGE = 100
+
+
 @route("GET", "/alerts")
 def get_alerts(req: Request) -> Response:
-    return Response(ui.alerts_page(req.sess, db.settings(CONN), db.alerts_tail(CONN, 100),
-                                   req.query.get("msg", ""), alerts=alert_count(CONN)))
+    number = page_number(req)
+    rows = db.alerts_tail(CONN, ALERTS_PER_PAGE, (number - 1) * ALERTS_PER_PAGE)
+    cfg = db.settings(CONN)
+    return Response(ui.alerts_page(req.sess, cfg, rows,
+                                   req.query.get("msg", ""), alerts=alert_count(CONN),
+                                   paging=(number, ALERTS_PER_PAGE, db.alerts_count(CONN)),
+                                   days=db.retention_days(cfg, "alerts_days")))
 
 
 @route("POST", "/alerts/seen")
@@ -1135,29 +1155,44 @@ def post_alerts_test(req: Request) -> Response:
 # kopie zapasowe
 # --------------------------------------------------------------------------
 
-def backup_files(cfg: dict) -> list[str]:
-    return export.local_files(cfg)
+BACKUP_ROWS = 30          # tyle kopii na liscie; reszta po "Pokaz wszystkie"
 
 
 @route("GET", "/backups")
 def get_backups(req: Request) -> Response:
+    # pliki polozone recznie w katalogu roboczym trafiaja na liste (jedna lista kopii);
+    # NAS NIE jest tu odpytywane - tylko przyciskiem "Odswiez liste z NAS"
+    try:
+        export.adopt_local(CONN)
+    except (OSError, sqlite3.Error):
+        pass
     cfg = db.settings(CONN)
-    nas_files, nas_error = None, ""
-    if req.query.get("nas"):
-        # tylko na zadanie - niedostepny NAS nie moze spowalniac zwyklego wejscia na strone
-        try:
-            nas_files = export.list_smb(cfg)
-        except Exception as exc:  # noqa: BLE001
-            nas_error = f"NAS: {exc}"
-    return Response(ui.backups_page(req.sess, cfg, db.backups_tail(CONN, 20),
-                                    backup_files(cfg), req.query.get("msg", "") or nas_error,
-                                    alerts=alert_count(CONN), nas_files=nas_files))
+    rows = db.backups_list(CONN, None if req.query.get("all") else BACKUP_ROWS)
+    return Response(ui.backups_page(req.sess, cfg, rows, export.local_files(cfg),
+                                    req.query.get("msg", ""), alerts=alert_count(CONN),
+                                    scan=export.last_scan(cfg), total=db.backups_count(CONN)))
+
+
+@route("POST", "/backups/scan")
+def post_backup_scan(req: Request) -> Response:
+    """Jedyne miejsce, ktore pyta NAS o liste kopii - na klikniecie, nigdy w tle."""
+    cfg = db.settings(CONN)
+    try:
+        result = export.scan_smb(CONN)
+    except Exception as exc:  # noqa: BLE001
+        return redirect_err("/backups#lista",
+                            "NAS: " + i18n.helper(export.explain_smb(cfg, exc)))
+    message = _("NAS: {n} kopii.", n=result["count"])
+    if result["added"]:
+        message += " " + _("Dopisane do listy: {n} (panel ich nie znał, np. sprzed reinstalacji).",
+                           n=result["added"])
+    return redirect(with_msg("/backups", message) + "#lista")
 
 
 @route("POST", "/backups/run")
 def post_backup_run(req: Request) -> Response:
-    # "Kopia lokalnie" / "Kopia na NAS": cel tej jednej kopii; kopie automatyczne bez zmian
-    target = req.get("target") if req.get("target") in ("local", "smb") else None
+    # "Na NAS" / "Na Pi": cel tej jednej kopii; kopie automatyczne bez zmian
+    target = req.get("target") if req.get("target") in export.TARGETS else None
     record = export.run(CONN, actor=req.actor, target=target)
     if not record["ok"]:
         return redirect_err("/backups", _("Kopia się nie powiodła: {error}",
@@ -1174,7 +1209,7 @@ def post_backup_delete(req: Request) -> Response:
     db.log(CONN, req.actor, "backup.delete",
            i18n.pl("{n} (karta: {local}, NAS: {remote})", n=summary["deleted"],
                    local=summary["local"], remote=summary["remote"]))
-    message = _("Usunięto kopie: {n} (plików na karcie: {local}, na NAS: {remote}).",
+    message = _("Usunięto kopie: {n} (plików na Pi: {local}, na NAS: {remote}).",
                 n=summary["deleted"], local=summary["local"], remote=summary["remote"])
     if summary["problems"]:
         problems = "; ".join(i18n.helper(problem) for problem in summary["problems"])
@@ -1185,6 +1220,8 @@ def post_backup_delete(req: Request) -> Response:
 @route("POST", "/backups/settings")
 def post_backup_settings(req: Request) -> Response:
     db.set_setting(CONN, "backup_enabled", "1" if req.get("backup_enabled") else "0")
+    if req.get("backup_target") and req.get("backup_target") not in export.TARGETS:
+        return redirect_err("/backups#ustawienia", _("Nieznany cel kopii."))
     for key in ("backup_time", "backup_keep", "backup_target", "backup_dir",
                 "backup_passphrase", "smb_host", "smb_share", "smb_path",
                 "smb_user", "smb_pass"):
@@ -1196,9 +1233,11 @@ def post_backup_settings(req: Request) -> Response:
 
 @route("POST", "/backups/export")
 def post_backup_export(req: Request) -> Response:
-    blob, encrypted = export.serialize(CONN, req.get("passphrase"))
+    # puste pole = haslo kopii z ustawien (wtedy plik to pelna kopia, jak na NAS)
+    secret = req.get("passphrase") or db.settings(CONN).get("backup_passphrase", "")
+    blob, encrypted, kind = export.pack(CONN, secret)
     name = export.filename(encrypted)
-    db.log(CONN, req.actor, "backup.export", "zaszyfrowana" if encrypted else "jawna")
+    db.log(CONN, req.actor, "backup.export", export.KIND_DETAIL[kind])
     return Response(blob, content_type="application/octet-stream",
                     headers=[("Content-Disposition", f'attachment; filename="{name}"')])
 
@@ -1206,15 +1245,51 @@ def post_backup_export(req: Request) -> Response:
 @route("POST", "/backups/restore")
 def post_backup_restore(req: Request) -> Response:
     try:
-        summary = export.restore_from(CONN, req.get("source"), req.get("passphrase"),
+        source = req.get("source")
+        if not source:
+            # bez okna (np. bez JavaScriptu) przychodza zaznaczone wiersze listy
+            ids = [value for value in req.get_all("id") if value.isdigit()]
+            if len(ids) != 1:
+                raise ValueError(_("zaznacz na liście jedną kopię"))
+            source = f"id:{ids[0]}"
+        secret = req.get("passphrase") or db.settings(CONN).get("backup_passphrase", "")
+        summary = export.restore_from(CONN, source, secret,
                                       bool(req.get("with_users")), req.actor)
     except Exception as exc:  # noqa: BLE001
         return redirect_err("/backups", _("Odtwarzanie nieudane: {error}", error=exc))
+    identity = export.apply_identity(CONN, summary)
     message = _("Odtworzono z {source}: {peers} peerów, {tiers} tierów, {rules} reguł. Poprzedni "
                 "stan zapisany jako {safety}. Zastosuj zmiany, żeby trafiły na interfejs.",
                 source=summary["source"], peers=summary["peers"], tiers=summary["tiers"],
                 rules=summary["rules"], safety=summary["safety"])
+    message += " " + identity_note(identity)
+    if identity["verdict"] == "changed" or identity["error"]:
+        return redirect_err("/", message)
     return redirect(with_msg("/", message))
+
+
+def identity_note(identity: dict) -> str:
+    """Jedno zdanie po odtworzeniu: czy dotychczasowe pliki osob zadzialaja."""
+    notes = {
+        "restored": _("Klucz serwera przywrócony z kopii - po zastosowaniu zmian wszyscy łączą "
+                      "się swoimi dotychczasowymi plikami."),
+        "same": _("Klucz serwera tego Pi jest taki sam jak w kopii - dotychczasowe pliki osób "
+                  "działają."),
+        "changed": _("Klucz serwera tego Pi jest INNY niż w kopii, a kopia go nie zawiera. "
+                     "Dotychczasowe pliki osób nie zadziałają - każdej osobie wydaj nowy plik "
+                     "(Rotacja kluczy na karcie osoby, potem Zastosuj zmiany)."),
+        "unknown": "",
+    }
+    text = notes[identity["verdict"]]
+    if identity["error"]:
+        text += " " + _("Nie udało się przywrócić klucza serwera: {error}",
+                        error=i18n.helper(identity["error"]))
+    if identity["ca"] == "new":
+        text += " " + _("Certyfikat HTTPS: powstał nowy urząd (inna nazwa albo sieć Pi niż w kopii) "
+                        "- zainstaluj nowy ca.crt na urządzeniach.")
+    elif identity["ca"] == "restored":
+        text += " " + _("Certyfikat HTTPS przywrócony - urządzenia nie potrzebują nowego ca.crt.")
+    return text.strip()
 
 
 # --------------------------------------------------------------------------
@@ -1411,7 +1486,11 @@ def get_integrity(req: Request) -> Response:
 
 @route("POST", "/backups/verify")
 def post_backup_verify(req: Request) -> Response:
-    results = export.verify_recent(CONN, int(req.get("count") or 5))
+    ids = [int(value) for value in req.get_all("id") if value.isdigit()]
+    if ids:
+        results = export.verify_many(CONN, ids)          # zaznaczone na liscie
+    else:
+        results = export.verify_recent(CONN, int(req.get("count") or 5))
     bad = [r for r in results if not r["ok"]]
     if not results:
         template, values = "Nie ma kopii do sprawdzenia.", {}
@@ -1670,16 +1749,16 @@ def get_api_pending(req: Request) -> Response:
 def get_api_peers(req: Request) -> Response:
     """Lekki endpoint dla strony peerow - odswieza sie bez przeladowania strony."""
     status, error = safe_status(CONN)
-    live = (status or {}).get("peers", {})
+    seen = stats.view(CONN, status)     # zapamietane - liczby nie zeruja sie po restarcie Pi
     rows = []
     for peer in db.peers(CONN):
-        stat = live.get(peer["pubkey"], {})
+        known = seen.get(peer["id"], {})
         rows.append({
             "id": peer["id"],
             "state": peer["state"],
-            "handshake": int(stat.get("latest_handshake", 0) or 0),
-            "rx": int(stat.get("rx", 0) or 0),
-            "tx": int(stat.get("tx", 0) or 0),
+            "handshake": known.get("handshake", 0),
+            "rx": known.get("rx", 0),
+            "tx": known.get("tx", 0),
         })
     payload = {
         "now": int(time.time()),
@@ -1692,19 +1771,25 @@ def get_api_peers(req: Request) -> Response:
     return Response(json.dumps(payload), content_type="application/json; charset=utf-8")
 
 
+def refresh_server_pubkey() -> str:
+    """Klucz publiczny serwera prosto z helpera (z klucza prywatnego na tym Pi).
+
+    Panel wpisuje go do kazdego pliku klienta, wiec zapamietana kopia musi sie zgadzac
+    z tym, co naprawde jest na dysku - takze po nowym systemie z nowym kluczem."""
+    try:
+        pubkey = helperclient.call(
+            "server_pubkey", {"settings": model.settings_only(CONN)}).get("pubkey", "")
+    except helperclient.HelperError:
+        return ""
+    if pubkey and pubkey != db.settings(CONN).get("server_pubkey"):
+        db.set_setting(CONN, "server_pubkey", pubkey)
+    return pubkey
+
+
 @route("GET", "/settings")
 def get_settings(req: Request) -> Response:
     cfg = db.settings(CONN)
-    pubkey = cfg.get("server_pubkey", "")
-    if not pubkey:
-        try:
-            pubkey = helperclient.call(
-                "server_pubkey", {"settings": model.settings_only(CONN)}
-            ).get("pubkey", "")
-            if pubkey:
-                db.set_setting(CONN, "server_pubkey", pubkey)
-        except helperclient.HelperError:
-            pubkey = ""
+    pubkey = refresh_server_pubkey() or cfg.get("server_pubkey", "")
     row = CONN.execute("SELECT totp_secret FROM users WHERE id = ?",
                        (req.sess["user_id"],)).fetchone()
     return Response(ui.settings_page(req.sess, cfg, pubkey, req.query.get("msg", ""),
@@ -1749,6 +1834,12 @@ def post_account_password(req: Request) -> Response:
 @route("POST", "/settings")
 def post_settings(req: Request) -> Response:
     allowed = set(db.DEFAULT_SETTINGS) | {"managed_host_ports"}
+    for key in ("audit_days", "alerts_days"):
+        value = req.get(key).strip() if key in req.form else ""
+        if key in req.form and not (value.isdigit() and int(value) <= db.RETENTION_MAX):
+            return redirect_err("/settings", _(
+                "Liczba dni dziennika i alertów to liczba całkowita od 0 do {max} "
+                "(0 = bez limitu).", max=db.RETENTION_MAX))
     for key in allowed:
         if key in req.form:
             db.set_setting(CONN, key, req.get(key).strip())
@@ -1761,16 +1852,21 @@ def post_settings(req: Request) -> Response:
 @route("GET", "/audit")
 def get_audit(req: Request) -> Response:
     newest = req.query.get("order", "desc") != "asc"
-    days = int(db.settings(CONN).get("audit_days", "7") or 0)
-    return Response(ui.audit_page(req.sess, db.audit_tail(CONN, 300, newest), newest, days,
-                                  alerts=alert_count(CONN)))
+    days = db.retention_days(db.settings(CONN), "audit_days")
+    number = page_number(req)
+    rows = db.audit_tail(CONN, AUDIT_PER_PAGE, newest, (number - 1) * AUDIT_PER_PAGE)
+    return Response(ui.audit_page(req.sess, rows, newest, days, alerts=alert_count(CONN),
+                                  paging=(number, AUDIT_PER_PAGE, db.audit_count(CONN))))
 
 
 @route("GET", "/static/style.css", login_required=False)
 def get_style(req: Request) -> Response:
+    # adres z odciskiem pliku (?v=...) - przegladarka trzyma styl, dopoki panel go nie zmieni
+    cache = ("public, max-age=31536000, immutable" if req.query.get("v") == ui.style_version()
+             else "max-age=300")
     with open(os.path.join(STATIC_DIR, "style.css"), "rb") as handle:
         return Response(handle.read(), content_type="text/css; charset=utf-8",
-                        headers=[("Cache-Control", "max-age=300")])
+                        headers=[("Cache-Control", cache)])
 
 
 # --------------------------------------------------------------------------
@@ -1876,9 +1972,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(Response(ui.simple(_("Nie znaleziono"), _("Nie ma takiej strony.")), 404))
 
     def _send(self, response: Response) -> None:
+        body = response.body
+        packed = self._gzip_ok(response)
+        if packed:
+            body = gzip.compress(body, 6)
         self.send_response(response.status)
         self.send_header("Content-Type", response.content_type)
-        self.send_header("Content-Length", str(len(response.body)))
+        self.send_header("Content-Length", str(len(body)))
+        if packed:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -1891,8 +1994,21 @@ class Handler(BaseHTTPRequestHandler):
         took = time.time() - getattr(self, "_started", time.time())
         if took > 0.5:      # tylko wolne zadania - inaczej log zalewa dziennik
             sys.stderr.write(f"wolne zadanie: {self.path} {took:.2f}s\n")
-        if response.body:
-            self.wfile.write(response.body)
+        if body:
+            self.wfile.write(body)
+
+    def _gzip_ok(self, response: Response) -> bool:
+        """Kompresja stron i stylu - przez VPN na telefonie strona laduje sie kilka razy mniej
+        danych. Bez kompresji, gdy adres niesie tekst odbijany na stronie (msg, err, symulator):
+        strona ma tez token CSRF, a kompresja tekstu wpisanego przez kogos obok sekretu to
+        znany atak (BREACH)."""
+        if len(response.body) < 1024 or "gzip" not in (self.headers.get("Accept-Encoding") or ""):
+            return False
+        if not response.content_type.startswith(("text/", "application/json", "image/svg+xml")):
+            return False
+        if any(key.lower() == "content-encoding" for key, _value in response.headers):
+            return False
+        return "?" not in self.path
 
     @staticmethod
     def _change_pending() -> bool:
@@ -2003,7 +2119,7 @@ def tls_refresh(renew: bool = False) -> None:
     except helperclient.HelperError as exc:
         TLS["error"] = str(exc)      # panel dziala dalej na certyfikacie, ktory juz ma
         notify.raise_alert(CONN, "tls", "certyfikat HTTPS",
-                           f"Nie udalo sie sprawdzic ani odnowic certyfikatu panelu: {exc}",
+                           i18n.pl(i18n.ALERTS["tls"], error=exc),
                            severity="warn")
     crt, key = os.path.join(TLS_DIR, "panel.crt"), os.path.join(TLS_DIR, "panel.key")
     try:
@@ -2078,6 +2194,7 @@ def main() -> int:
         log=lambda message: sys.stderr.write(message + "\n"),
         peers_fn=live_peers,
     )
+    refresh_server_pubkey()        # przy kazdym starcie - np. po odtworzeniu kopii
     worker.drift_fn = drift_now
     worker.dirty_fn = lambda: model.is_dirty(CONN, None, safe_status(CONN, 30)[0])
     worker.start()

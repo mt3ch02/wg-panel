@@ -4,10 +4,12 @@
 #   sudo ./uninstall.sh            usuwa panel (program, uslugi, wgctl, reguly ufw panelu, urzad
 #                                  certyfikacji). VPN dziala dalej z ostatnia konfiguracja,
 #                                  dane panelu zostaja - ponowna instalacja przywroci panel.
-#   sudo ./uninstall.sh --purge    jak wyzej + dane panelu (baza, kopie na karcie, certyfikaty),
+#   sudo ./uninstall.sh --purge    jak wyzej + dane panelu (baza, kopie na karcie, certyfikaty,
+#                                  zapamietane opcje instalacji z /etc/wg-panel),
 #                                  kopie plikow z /etc/wireguard i konto wg-panel. VPN dalej dziala.
 #   sudo ./uninstall.sh --restore  jak --purge + powrot do konfiguracji sprzed panelu
-#                                  (/root/wg-panel-before z Kroku 2). Po nim: sudo reboot.
+#                                  (/root/wg-panel-before - instalator robi ja przy przejeciu
+#                                  istniejacego WireGuarda). Po nim: sudo reboot.
 #
 #   --yes            bez pytania o potwierdzenie
 #   INSTALL_LANG=pl  komunikaty po polsku (domyslnie angielski)
@@ -108,7 +110,7 @@ rm -f "$WG/wg-panel-pending.json"
 
 if [ "$MODE" != keep ]; then
     info "$(t "Usuwam dane panelu i konto wg-panel" "Removing panel data and the wg-panel account")"
-    rm -rf "$DATA" "$WG/wg-panel-backups"
+    rm -rf "$DATA" "$WG/wg-panel-backups" "$ROOT/etc/wg-panel"
     userdel wg-panel >/dev/null 2>&1 || true
     groupdel wg-panel >/dev/null 2>&1 || true
 fi
@@ -136,6 +138,6 @@ case "$MODE" in
     purge)
         echo "$(t "VPN działa dalej z ostatnią konfiguracją z panelu - od teraz zmieniasz ją ręcznie w /etc/wireguard/wg0.conf." "The VPN keeps working with the panel's last configuration - from now on you edit /etc/wireguard/wg0.conf by hand.")" ;;
     restore)
-        echo "$(t "Uruchom ponownie Pi: sudo reboot - po restarcie działa konfiguracja z Kroku 2." "Restart the Pi: sudo reboot - after the restart the configuration from Step 2 is running.")" ;;
+        echo "$(t "Uruchom ponownie Pi: sudo reboot - po restarcie działa konfiguracja sprzed panelu." "Restart the Pi: sudo reboot - after the restart the pre-panel configuration is running.")" ;;
 esac
 echo "$(t "Jeśli instalowałeś na urządzeniach certyfikat panelu (wg-panel CA), możesz go teraz z nich usunąć." "If you installed the panel certificate (wg-panel CA) on devices, you can remove it from them now.")"

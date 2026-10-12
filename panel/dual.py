@@ -26,7 +26,7 @@ import json
 import sqlite3
 import time
 
-from . import db, notify
+from . import db, i18n, notify
 
 KIND = "two_devices"
 SETTING = "alert_two_devices"
@@ -152,11 +152,8 @@ class Watch:
                 changes.append(("start", peer_id))
                 notify.raise_alert(
                     conn, KIND, f'{peer["name"]}: tunel na dwóch urządzeniach',
-                    f'{peer["name"]} ({peer["ip"]}) łączy się na przemian z {_join(shown)} - '
-                    'ten sam plik konfiguracyjny działa na dwóch urządzeniach i wyrzucają się '
-                    'nawzajem, stąd przerwy w połączeniu. Wyłącz tunel na jednym z nich; jeśli nie '
-                    'wiesz, czyje jest drugie, wymień klucze. (Rzadziej to telefon, który '
-                    'przeskakuje między Wi-Fi a siecią komórkową.)',
+                    i18n.pl(i18n.ALERTS["two_devices"], name=peer["name"], ip=peer["ip"],
+                            where=_join(shown)),
                     severity="alarm",
                 )
 
@@ -180,8 +177,8 @@ class Watch:
             minutes = max(1, (last - incident["since"]) // 60)
             notify.raise_alert(
                 conn, KIND, f'{peer["name"]}: przeskakiwanie ustało',
-                f'{peer["name"]} ({peer["ip"]}): od {CALM // 60} min nie widać drugiego urządzenia '
-                f'(przeskakiwanie trwało około {minutes} min).',
+                i18n.pl(i18n.ALERTS["calm"], name=peer["name"], ip=peer["ip"], n=CALM // 60,
+                        m=minutes),
                 severity="info",
             )
         return changes

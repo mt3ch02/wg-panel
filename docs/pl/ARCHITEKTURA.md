@@ -4,7 +4,7 @@
 
 To dokumentacja techniczna: jak panel jest zbudowany, co robi każdy moduł, jak działają reguły, bezpiecznik, HTTPS, i kopie zapasowe. Przydaje się przy zmianach w kodzie albo diagnozie. **Jeśli chcesz zainstalować panel — zacznij od [INSTALACJA.md](INSTALACJA.md).**
 
-Spis: [Architektura](#architektura) · [Model reguł](#model-reguł) · [Bezpiecznik](#bezpiecznik) · [HTTPS](#https) · [Kopie zapasowe](#kopie-zapasowe) · [Warstwy bezpieczeństwa](#warstwy-bezpieczeństwa) · [Budowa i pliki](#budowa-i-pliki) · [Znane ograniczenia](#znane-ograniczenia)
+Spis: [Architektura](#architektura) · [Instalacja i aktualizacja](#instalacja-i-aktualizacja) · [Model reguł](#model-reguł) · [Bezpiecznik](#bezpiecznik) · [HTTPS](#https) · [Kopie zapasowe](#kopie-zapasowe) · [Warstwy bezpieczeństwa](#warstwy-bezpieczeństwa) · [Budowa i pliki](#budowa-i-pliki) · [Testy](#testy) · [Znane ograniczenia](#znane-ograniczenia)
 
 ## Architektura
 
@@ -36,6 +36,55 @@ podgląd, helper liczy stan faktyczny.
 **Klucz prywatny serwera nigdy nie trafia do bazy ani do panelu.** Helper czyta go z dysku przy
 każdym renderowaniu i sam podstawia w miejsce placeholdera.
 
+## Instalacja i aktualizacja
+
+```bash
+sudo ./install.sh                                  # domyślnie 10.0.0.1:8080
+sudo LAN_ACCESS=192.168.1.0/24 ./install.sh        # także z sieci domowej
+sudo BIND_PORT=8443 ./install.sh
+```
+
+Opcje (`LAN_ACCESS`, `BIND_HOST`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) trafiają do `/etc/wg-panel/install.conf`,
+więc aktualizacja to samo `sudo ./install.sh`.
+
+### Pierwsza instalacja
+
+Przy pustej bazie instalator uruchamia `panel/firstrun.py`, który przez `ip` wykrywa sieć domową
+(`lan`), adres Pi w niej (`server_lan`), interfejs z trasą domyślną (`wan_if`) i podpowiada adres
+hosta `nas` (adres sieci + 10, z pominięciem adresu Pi). Wpisuje tylko to, czego jeszcze nie ma —
+`python3 -m panel.firstrun --show` pokazuje wykryte wartości bez zapisu. Domyślne ustawienia
+w kodzie są neutralne (`192.168.1.0/24`, Pi `192.168.1.10`, NAS `192.168.1.11`, port 51820,
+`vpn.example.com:51820`).
+
+Tiery wbudowane (ADMIN, NET, NAS) powstają tylko na pustej bazie i tylko raz (znacznik
+`tiers_seeded`); host `nas` tak samo (`seeded_nas`). Usunięty albo przemianowany tier nie wraca
+przy aktualizacji ani przy restarcie panelu.
+
+Na czystym systemie bez klucza serwera instalator pyta: wklej istniejący klucz albo wygeneruj nowy
+(bez terminala: `SERVER_KEY=paste` z kluczem na wejściu albo `SERVER_KEY=new`). Przy przejęciu
+istniejącego `wg0.conf` sam zapisuje stan sprzed panelu do `/root/wg-panel-before/` (jeśli jeszcze
+go tam nie ma) — z niego korzysta `uninstall.sh --restore`.
+
+### Aktualizacja
+
+Aktualizacja to `sudo ./install.sh` z nowej wersji. Instalator rozpoznaje ją po `wg0.conf`
+wygenerowanym przez panel i:
+
+1. czyta opcje z `/etc/wg-panel/install.conf` (root, 644). Opcja podana jawnie wygrywa, także
+   pusta (`LAN_ACCESS=` wyłącza dostęp z LAN). Instalacja sprzed tego pliku: adres, port i HTTPS
+   z pliku usługi `wg-panel.service`, a `WGPANEL_HOST=0.0.0.0` oznacza dostęp z LAN — sieć z reguły
+   ufw z komentarzem `wg-panel LAN` albo z ustawienia `lan` w bazie, adres w VPN z `server_ip`;
+2. kopiuje kod do `/opt/wg-panel` (dane w `/var/lib/wg-panel` zostają);
+3. robi migawkę bazy (`python3 -m panel.restore_cli snapshot`) — kopia „sprzed aktualizacji” na
+   liście Kopie, odtwarzana jak każda inna;
+4. restartuje usługi; schemat bazy migruje się przy starcie, nowe ustawienia dochodzą przez
+   `INSERT OR IGNORE`, więc wartości użytkownika nigdy nie są nadpisywane;
+5. po udanym starcie zapisuje opcje do `install.conf`.
+
+Klucz serwera, urząd certyfikacji i pliki osób nie są ruszane. `tests/test_update.py` sprawdza
+wszystkie te kroki: dane po aktualizacji, migawkę, odczyt opcji (także ze starszej instalacji)
+i wykrywanie sieci przy pierwszej instalacji.
+
 ## Okna dostępu
 
 Każdy peer ma jeden z trzech trybów. Tryb wybierasz jawnie — panel niczego nie zgaduje
@@ -63,11 +112,14 @@ dostępu administratora.
 
 Panel słucha na adresach z `WGPANEL_HOST` (lista po przecinku albo `0.0.0.0`); `127.0.0.1` jest
 zawsze, a adresu, którego jeszcze nie ma (`10.0.0.1` przed podniesieniem `wg0`), panel pilnuje
-w tle. Instalacja z `LAN_ACCESS=192.168.1.0/24` wystawia panel na sieć domową i zakłada regułę ufw.
+w tle. Instalacja z `LAN_ACCESS=192.168.1.0/24` ustawia nasłuch na wszystkich adresach i zakłada
+regułę ufw (komentarz `wg-panel LAN`) wpuszczającą na port panelu tylko z tej sieci; bez niej
+reguła ufw wpuszcza wyłącznie z `wg0`.
 
-Z VPN panel otworzą **tylko peery z zaznaczonym dostępem** (`panel_access`): port panelu trafia
-do portów zarządzanych łańcucha `WG-USERS-HOST`, więc pozostali dostają DROP mimo bycia w VPN.
-Przełącznik jest na stronie osoby, w terminalu `wgctl set NAZWA --panel on`.
+Z VPN panel otworzą **tylko tiery, które mają port panelu w polu „Porty na samym Pi”**
+(`host_access`; domyślnie ADMIN: `22,3389,8080`). Port panelu należy do portów zarządzanych
+łańcucha `WG-USERS-HOST`, więc pozostali dostają DROP mimo bycia w VPN. Starsza wersja miała
+osobny przełącznik przy osobie (`panel_access`); migracja przenosi go na port w tierze tej osoby.
 
 ## Co idzie przez VPN u klienta
 
@@ -80,7 +132,7 @@ Linia `AllowedIPs` w pliku klienta jest liczona z trybu: tieru albo nadpisanego 
 | `lan` — cała sieć domowa | VPN + LAN (jak w pierwszej wersji) |
 | `custom` — własna lista | nazwy z katalogu i adresy |
 
-Domyślnie ADMIN i NET mają `full`, NAS — `auto` (`192.168.1.11/32`). Dodanie reguły ACCEPT
+Domyślnie ADMIN i NET mają `full`, NAS — `auto` (adres hosta `nas`, np. `192.168.1.11/32`). Dodanie reguły ACCEPT
 w trybie `auto` samo rozszerza plik klienta. Panel pamięta, jaki zakres dostała osoba przy
 ostatnim wydaniu pliku, i ostrzega, gdy obecny plik czegoś nie obejmuje. `AllowedIPs` to routing,
 nie uprawnienia — o dostępie decydują wyłącznie reguły na serwerze.
@@ -140,7 +192,7 @@ Co 5 minut panel porównuje stan z tym, co sam zastosował:
 | prawa dostępu | klucze czytelne dla innych kont |
 | lista peerów na interfejsie | klucz dodany przez `wg set` z pominięciem panelu |
 | liczba reguł w łańcuchach | reguły dopisane do łańcuchów panelu |
-| pierwsza reguła `FORWARD` | ACCEPT wstawiony przed łańcuch panelu |
+| pierwsza reguła `FORWARD` | ACCEPT wstawiony przed łańcuch panelu (skok Dockera do `DOCKER-USER` jest w porządku, jeśli tam pierwszy jest skok panelu) |
 
 Każda rozbieżność to alarm i czerwony baner na liście peerów. Przywrócenie = ponowne zastosowanie
 z bazy, z bezpiecznikiem.
@@ -187,6 +239,7 @@ wgctl guard                # strażnik ręcznie: co działa, co nie
 wgctl diff                        # co zmieni najbliższe zastosowanie
 wgctl apply                       # z bezpiecznikiem; potem wgctl confirm
 wgctl backup                      # kopia zgodnie z ustawieniami, od razu weryfikowana
+wgctl backup --target local       # ta jedna kopia gdzie indziej: smb / local / both
 wgctl backup --verify             # sprawdz sumy kontrolne ostatnich kopii
 wgctl host list                   # katalog hostow
 wgctl host add drukarka 192.168.1.70 --ip6 fd00:77::70
@@ -200,7 +253,10 @@ wgctl export /mnt/nas/kopia.json.enc --pass haslo
 
 ## Model reguł
 
-Reguły trafiają do łańcucha `WG-USERS` podpiętego na początku `FORWARD`. Kolejność w łańcuchu to
+Reguły trafiają do łańcucha `WG-USERS` podpiętego na początku `FORWARD`. Gdy na Pi jest Docker,
+skok do `WG-USERS` siedzi też na początku `DOCKER-USER` — Docker przy każdym starcie wstawia swoje
+skoki na górę `FORWARD`, ale `DOCKER-USER` sprawdza zawsze pierwszy i nigdy go nie czyści. Zastosowanie
+zmian przesuwa skok panelu z powrotem na samą górę, jeśli coś go zepchnęło. Kolejność w łańcuchu to
 kolejność sprawdzania:
 
 ```
@@ -307,7 +363,9 @@ Pi musi wpuszczać serwer proxy na port panelu (`LAN_ACCESS` w instalatorze).
 Bez HTTPS: `TLS=0 ./install.sh`. Komunikaty instalatora po polsku: `INSTALL_LANG=pl ./install.sh` (domyślnie po angielsku).
 
 Odinstalowanie: `sudo /opt/wg-panel/uninstall.sh` — usuwa panel, VPN działa dalej, dane zostają;
-`--purge` usuwa też dane i konto `wg-panel`; `--restore` wraca do konfiguracji sprzed panelu.
+`--purge` usuwa też dane, konto `wg-panel` i `/etc/wg-panel`; `--restore` wraca do konfiguracji
+sprzed panelu z `/root/wg-panel-before/` (instalator zapisuje ją raz, przy przejęciu istniejącego
+`wg0.conf`).
 
 
 ## Powiadomienia i strażnik
@@ -360,12 +418,23 @@ zepsuło się logowanie).
 
 ## Telefon
 
-Panel działa w przeglądarce telefonu bez przewijania strony w bok (sprawdzone od 320 px).
-Poniżej 720 px nawigacja chowa się pod przyciskiem „Menu” (z licznikiem alertów), lista peerów
-zamienia się w karty, a pozostałe tabele w listy „podpis: wartość” — podpisy biorą się
-z nagłówków kolumn. Na ekranach dotykowych (także telefon w poziomie i tablet) pola formularzy
-mają 16 px, więc iPhone nie przybliża strony przy logowaniu, a przyciski są pod palec.
-Na komputerze z myszką wygląd się nie zmienia.
+Panel działa w przeglądarce telefonu i tabletu bez przewijania strony w bok (sprawdzone
+w szerokościach 320, 390, 768 i 1280 px). Do 1080 px nawigacja chowa się pod przyciskiem „Menu”
+(z licznikiem alertów); poniżej 720 px lista peerów zamienia się w karty, a pozostałe tabele
+w listy „podpis: wartość” — podpisy biorą się z nagłówków kolumn. Wykres ruchu na telefonie
+przewija się w bok we własnej ramce (otwiera się na najnowszych godzinach), strona nie. Na ekranach
+dotykowych (także telefon w poziomie i tablet) pola formularzy mają 16 px, więc iPhone nie przybliża
+strony przy logowaniu, a przyciski są pod palec. Na komputerze z myszką wygląd się nie zmienia.
+
+## Szybkość
+
+- Odpowiedzi tekstowe powyżej 1 KB idą skompresowane (gzip), gdy przeglądarka o to prosi — poza
+  stronami z parametrami w adresie (`?`), żeby treść zależna od żądania nie zdradzała sekretów
+  przez rozmiar odpowiedzi (BREACH).
+- Arkusz stylów ma adres z sumą treści (`/static/style.css?v=…`) i nagłówek `immutable`:
+  przeglądarka pobiera go raz na wersję.
+- Alerty są stronicowane po 50, dziennik po 100; lista kopii pokazuje 30 ostatnich (reszta po
+  „Pokaż wszystkie”).
 
 ## Potwierdzenia akcji
 
@@ -392,7 +461,7 @@ kto by potwierdził. Usunięcie wygasłego peera nie może odciąć administrato
 | Zdarzenie | Kiedy | Waga |
 |---|---|---|
 | `new_endpoint` | ten sam klucz łączy się z innego adresu IP | alarm |
-| `dead_peer` | brak handshake'u dłużej niż próg | ostrzeżenie |
+| `dead_peer` | brak handshake'u dłużej niż próg — raz na przerwę, liczony także sprzed restartu Pi | ostrzeżenie |
 | `expired` | peer stracił ważność i został zawieszony | informacja |
 | `window_open` | okno terminowe peera się otworzyło (w dzienniku) | — |
 | `two_devices` | ten sam plik działa na dwóch urządzeniach naraz (adres przeskakuje A → B → A) | alarm; „ustało” — informacja |
@@ -416,17 +485,72 @@ Trwające incydenty trzymane są w tabeli `dual_use`, żeby restart panelu ich n
 
 Kanały: **ntfy** (POST w formacie JSON) albo **webhook** (JSON); opcjonalnie dodatkowo e-mail (SMTP).
 
+**Jak długo leżą.** Dziennik i alerty mają osobne limity: `audit_days` i `alerts_days`
+(Ustawienia → Zaawansowane → „Dziennik [dni]” i „Alerty [dni]”), domyślnie 90 dni. `0` znaczy
+bez limitu — nic nie jest kasowane. Harmonogram sprząta raz na dobę (`db.prune_history`), a strony
+dziennika i alertów pokazują obowiązujący limit. Wcześniej oba miały wspólny `audit_days`
+(domyślnie 7); aktualizacja i odtworzenie starszej kopii dają alertom tę samą wartość, więc nic
+nie znika ani nie zostaje dłużej bez Twojej decyzji. Historia ruchu ma osobny, stały limit 8 dni.
+
+Treści alertów to szablony z `i18n.ALERTS` — zapisywane po polsku, na stronie Alerty pokazywane
+w języku panelu (także starsze wpisy), z czytelną nazwą rodzaju zamiast kodu (`i18n.alert_kind`).
+
 ## Kopie zapasowe
 
-Kopia to jeden JSON: ustawienia, tiery, peery, reguły i konta. Z niej odtworzysz panel na czystej
-karcie — `wg0.conf` i reguły iptables zostaną wygenerowane od nowa przy pierwszym zastosowaniu.
+Kopia to jeden JSON. Rodzaj zależy od **hasła kopii**:
 
-Cele: **katalog na dysku** (może być punkt montowania udziału) albo **NAS przez SMB**
+| | podstawowa (bez hasła) | pełna (z hasłem, zaszyfrowana) |
+|---|---|---|
+| ustawienia, tiery, peery, reguły, hosty, konta | ✓ | ✓ |
+| hasła: NAS, ntfy, e-mail | — | ✓ |
+| historia: ruch, handshake'i, dziennik, alerty, lista kopii | — | ✓ |
+| klucz prywatny serwera, urząd certyfikacji HTTPS (z helpera) | — | ✓ |
+
+Z pełnej kopii odtworzysz całe Pi na czystej karcie jednym poleceniem:
+
+```bash
+sudo ./install.sh --restore
+```
+
+Instalator pyta o NAS i hasło kopii, pokazuje listę kopii, sprawdza sumę, zapisuje klucz
+serwera i urząd certyfikacji, odtwarza bazę i podnosi tunel — dotychczasowe pliki osób działają,
+certyfikat na urządzeniach też (o ile nazwa i sieć Pi się nie zmieniły). Bez klucza serwera
+(kopia podstawowa albo jego brak) instalator pyta: wklej stary klucz / wygeneruj nowy / przerwij;
+bez interakcji: `SERVER_KEY=paste` (klucz na wejściu) albo `SERVER_KEY=new`. Kroki odtwarzania
+są w `panel/restore_cli.py` (`fetch` jako root przed instalacją, `import` i `apply` jako konto
+`wg-panel`); odpowiedzi można podać zmiennymi `WGPANEL_RESTORE_*`.
+
+Po odtworzeniu w panelu (Kopie → zaznacz kopię → Odtwórz zaznaczoną…) panel przywraca klucz z pełnej
+kopii i mówi wprost, czy dotychczasowe pliki osób zadziałają: kopia pamięta klucz publiczny serwera,
+więc przy kopii podstawowej porównuje go z kluczem tego Pi. Zapamiętany klucz publiczny nigdy nie
+jest przywracany z kopii — panel zawsze bierze go z helpera.
+
+Cele: **Pi** (katalog roboczy, może być punkt montowania udziału) albo **NAS** przez SMB
 (`smbclient`, hasło przekazywane przez zmienną środowiskową, nie w argumentach — żeby nie
 wyciekło do listy procesów).
 
-⚠ Kopia zawiera PSK wszystkich peerów. Jeśli ma leżeć na udziale sieciowym, ustaw hasło w polu
-„hasło kopii" — plik zostanie zaszyfrowany. Bez hasła trafia tam jawnym tekstem.
+**Strona Kopie.** U góry stan w trzech liniach (rodzaj kopii, harmonogram, ostatnia kopia) i
+„Zrób kopię teraz – gdzie?” (NAS / Pi / ten komputer); w środku jedna lista wszystkich kopii
+(historia panelu plus pliki znalezione na Pi i na NAS-ie, każda kopia raz) z akcjami na zaznaczonych:
+sprawdź sumę, odtwórz (okno z hasłem kopii i kontem panelu), usuń; na dole ustawienia. NAS jest
+pytany o listę tylko przyciskiem „Odśwież listę z NAS” — wynik panel pamięta i oznacza kopie,
+których na NAS-ie już nie ma, bez ponownego budzenia serwera.
+
+Lista ma kolumny Kiedy / Gdzie / Rodzaj / Stan (`ui.backup_items`, `ui.backup_row`). Rodzaj:
+pełna, pełna bez klucza (pełna kopia zrobiona, gdy helper nie oddał klucza serwera), podstawowa,
+sprzed odtworzenia / sprzed aktualizacji (migawki `export.snapshot_local`), znaleziona (plik
+z Pi albo NAS-a, którego nie ma w historii), nieudana. Stan: sprawdzona, niesprawdzona,
+uszkodzona, nieudana, brak pliku. Pod listą jest zwijana legenda z tymi opisami.
+
+**Gdzie ląduje kopia** (`backup_target`, także `wgctl backup --target`): `smb` — tylko NAS
+(plik na Pi istnieje tylko na czas wysyłki), `local` — tylko Pi, `both` — oba miejsca; kopia
+„NAS + Pi” odtwarzana jest z Pi (gdy suma się zgadza), a weryfikacja zawsze sprawdza
+egzemplarz na NAS-ie. Przy `smb` panel usuwa z Pi kopie robocze zostawione przez starszą wersję
+(tylko te ze zgodną sumą na NAS-ie).
+
+⚠ Kopia podstawowa zawiera PSK wszystkich peerów i trafia na udział jawnym tekstem — panel
+pokazuje to czerwoną kropką na górze strony Kopie. Pełna kopia zawiera tożsamość VPN: hasło kopii
+co najmniej 12 znaków (krótsze panel odradza), trzymane w menedżerze haseł.
 
 Konstrukcja szyfrowania: scrypt (N=2¹⁵) → dwa klucze, ChaCha20 (RFC 8439) do szyfrowania,
 HMAC-SHA256 do uwierzytelnienia szyfrogramu. Implementacja sprawdzona wektorami testowymi z RFC.
@@ -437,8 +561,8 @@ leży — także z NAS — i sprawdza sumę; przy zaszyfrowanej kopii dodatkowo 
 każdej kopii dobowej sprawdzane są też trzy poprzednie, co wyłapuje późniejsze uszkodzenia albo
 podmianę pliku na NAS-ie. Niezgodność to alarm.
 
-Hasła SMB i hasło kopii **nie wychodzą w eksporcie** — po odtworzeniu na nowej maszynie trzeba
-je wpisać raz jeszcze.
+Hasła (SMB, ntfy, e-mail i samo hasło kopii) są tylko w kopii pełnej — zaszyfrowanej tym hasłem,
+więc odtworzone Pi od razu dalej robi pełne kopie. W podstawowej nie ma żadnego hasła.
 
 ## Warstwy bezpieczeństwa
 
@@ -476,6 +600,7 @@ wg-panel/
 ├── wgctl             CLI (te same operacje co panel)
 ├── install.sh        instalator (kopiuje program do /opt/wg-panel)
 ├── uninstall.sh      odinstalowanie (trzy poziomy)
+├── tests/            testy na atrapach wg/iptables/systemctl (nie trafiają na Pi)
 └── docs/             dokumentacja PL i EN, zrzuty ekranu
 ```
 
@@ -567,6 +692,9 @@ NAS (udział backup)/wg-panel/ kopie na NAS-ie (+ .sha256)
 | `panel/render.py` | generowanie `wg0.conf`, reguł zapory i plików dla klientów |
 | `panel/schedule.py`, `scheduler.py` | terminy dostępu; wątek w tle: co 5 s próbka adresów peerów, co 30 s alerty, kopie dobowe, integralność |
 | `panel/dual.py` | wykrywanie tego samego pliku na dwóch urządzeniach naraz |
+| `panel/stats.py` | ostatni handshake i łączny ruch osób — pamiętane w bazie, przetrwają restart Pi |
+| `panel/restore_cli.py` | odtworzenie całego Pi z pełnej kopii (`install.sh --restore`), migawka przed aktualizacją |
+| `panel/firstrun.py` | pierwsza instalacja: wykrycie sieci LAN, adresu Pi, interfejsu WAN |
 | `panel/watchdog.py` | strażnik |
 | `panel/notify.py` | powiadomienia: ntfy, webhook, e-mail |
 | `panel/export.py`, `cryptobox.py` | kopie zapasowe, szyfrowanie, NAS, odtwarzanie |
@@ -588,10 +716,17 @@ NAS (udział backup)/wg-panel/ kopie na NAS-ie (+ .sha256)
 
 ### Co się dzieje przy starcie Pi
 
-1. `wg-quick@wg0` podnosi tunel z `wg0.conf`; jego `PostUp` tworzy łańcuchy zapory i wczytuje reguły — **VPN działa, zanim wstanie panel**.
+1. `wg-quick@wg0` podnosi tunel z `wg0.conf`; jego `PostUp` tworzy łańcuchy zapory i wczytuje reguły — **VPN działa, zanim wstanie panel**. Jeśli na Pi jest Docker, `PostUp` wpina panel także do `DOCKER-USER`, więc Docker startujący później nie wejdzie przed reguły panelu.
 2. `wg-panel-helper` — jeśli przed restartem zmiana czekała na potwierdzenie, daje świeże okno i cofa ją, gdy nikt nie potwierdzi.
 3. `wg-panel` — panel WWW; sprawdza certyfikat HTTPS.
 4. `wg-panel-guard.timer` — strażnik pierwszy raz 2 minuty po starcie, potem co minutę.
+
+Jądro po restarcie liczy handshake i ruch od zera. Panel zapamiętuje je w bazie (`panel/stats.py`,
+tabela `peer_stats`, co 30 s, zapis tylko przy zmianie), więc lista dalej pokazuje, kiedy ktoś
+ostatnio się łączył i ile przesłał łącznie — po najechaniu na ruch widać, od kiedy liczony. Restart
+Pi rozpoznaje po zmianie `boot_id`; wiersz jest per osoba, więc rotacja kluczy nie zeruje historii.
+Pamięć zaczyna się od historii, którą panel już miał: próbek z wykresu (do 8 dni wstecz)
+i ostatniego handshake'u widzianego przez alerty.
 
 ### Gdzie szukać, gdy coś nie działa
 
@@ -619,11 +754,45 @@ Tak. `wgctl` pokrywa wszystko, co robi panel. Poza tym:
 - **`wg0.conf` jest generowany** — to jedyne miejsce, którego nie ma sensu edytować ręcznie.
 
 
+## Testy
+
+```bash
+for t in tests/selftest.py tests/test_*.py; do python3 "$t" || break; done
+```
+
+Każdy plik testów zakłada własną tymczasową bazę i podmienia `wg`, `iptables` oraz `systemctl`
+na atrapy, więc testy nie ruszają sieci ani VPN; testową kopię panelu uruchamiają lokalnie na
+innym porcie niż 8080. Wynik to `Wszystkie testy przeszly.` albo lista tego, co nie przeszło
+(komunikaty testów są po polsku).
+
+| Plik | Co sprawdza |
+|---|---|
+| `selftest.py` | ścieżka HTTP: założenie konta, logowanie, peery, reguły, walidacja |
+| `test_apply.py` | apply / confirm / rollback na atrapach `wg` i `iptables` |
+| `test_features.py` | symulator, wygasanie, alerty, kopie, szyfrowanie, `wgctl` |
+| `test_extras.py` | IPv6, katalog hostów, ruch, sumy kopii, integralność, QR |
+| `test_confirm.py` | potwierdzenia, auto-potwierdzanie, restart helpera, zapis peera (ok. 75 s) |
+| `test_tls.py` | HTTPS: urząd z ograniczeniem nazw, przekierowanie, odnawianie |
+| `test_i18n.py` | języki: kompletność tłumaczeń, brak polskiego tekstu na stronach angielskich |
+| `test_schedule.py` | terminy dostępu bez panelu, zmiana punktowa |
+| `test_guard.py` | strażnik: panel, helper, `wg0`, zdrowie Pi, certyfikat |
+| `test_dual.py` | ten sam plik na dwóch urządzeniach: alarm, „ustało”, bez fałszywych alarmów |
+| `test_restart.py` | restart Pi: kolejność reguł przy Dockerze, pamięć handshake'u i ruchu |
+| `test_fullbackup.py` | pełna kopia, `install.sh --restore`, pytanie o klucz serwera |
+| `test_install.py` | instalator po angielsku (domyślnie) i po polsku (`INSTALL_LANG=pl`) |
+| `test_update.py` | aktualizacja: dane, migawka, opcje, firstrun, osobne limity dziennika i alertów |
+| `test_uninstall.py` | odinstalowanie na udawanym systemie plików — trzy poziomy |
+| `test_permissions.py` | prawa plików między kontem `wg-panel` a członkiem grupy (wymaga roota, bez niego się pomija) |
+
+Testy używają wspólnych adresów z `tests/testnet.py` (sieć `192.168.50.0/24`, port 41194) —
+`testnet.use(conn)` w procesie testu, `testnet.seed_file(path)` dla baz uruchamianych
+w podprocesach — więc nie zależą od neutralnych ustawień domyślnych.
+
 ## Znane ograniczenia
 
-- **Domyślne ustawienia zakładają typową sieć domową** (`192.168.1.0/24`, NAS `192.168.1.11`, Pi `192.168.1.10`, port WireGuarda `51820`). Sprawdź je w Ustawieniach przed pierwszym zastosowaniem — przede wszystkim podsieć LAN (Krok 9 instrukcji).
-- **`wgctl`, treść powiadomień i komentarze w kodzie są po polsku.** Interfejs panelu i instalator mają polski i angielski.
-- W symulatorze komentarze wbudowanych reguł tierów (np. „reszta LAN zablokowana”) pokazują się po polsku także w interfejsie angielskim.
+- **Sieć wykryta przy instalacji warto sprawdzić** (Ustawienia: podsieć LAN, adres Pi, interfejs; Hosty: `nas`) — przede wszystkim podsieć LAN, bo na niej opiera się blokada „LAN” w tierach (Krok 9 instrukcji).
+- **`wgctl`, treść powiadomień (ntfy, e-mail) i komentarze w kodzie są po polsku.** Interfejs panelu i instalator mają polski i angielski.
+- Blokada „LAN” w tierach obejmuje podsieć z Ustawień, ale nie sieci Dockera na samym Pi (np. `172.17.0.0/16`) — usługi z kontenerów wystawione na Pi nie są nią objęte.
 - Testowane na Raspberry Pi OS (Debian). Inne dystrybucje z systemd, `iptables` i WireGuardem powinny działać, ale nie były sprawdzane.
 - Tylko IPv4 jest włączone domyślnie; IPv6 to opcja (sekcja IPv6 wyżej).
 
@@ -631,5 +800,5 @@ Tak. `wgctl` pokrywa wszystko, co robi panel. Poza tym:
 
 1. **Dziennik wysyłany poza Pi** — kopia audytu na NAS, której nie da się wyczyścić z Pi.
 2. **Powiadomienie o końcu okna na kanał alertów** — dziś plakietka w panelu.
-3. **Auto-wykrywanie sieci przy instalacji** — podsieć LAN, adres Pi i interfejs WAN podpowiadane zamiast wartości przykładowych.
-4. **Angielskie komunikaty `wgctl` i powiadomień.**
+3. **Angielskie komunikaty `wgctl` i powiadomień.**
+4. **Sieci Dockera w blokadzie „LAN”** — tak, żeby tier NAS nie widział kontenerów wystawionych na Pi.

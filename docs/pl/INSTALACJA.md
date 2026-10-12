@@ -4,7 +4,9 @@
 
 Ten przewodnik prowadzi krok po kroku przez instalację panelu na Raspberry Pi (albo innym Debianie/Ubuntu z systemd), przez uruchomienie VPN, powiadomienia i kopie zapasowe, aż po codzienną obsługę i rozwiązywanie problemów. Budowa wewnętrzna: [ARCHITEKTURA.md](ARCHITEKTURA.md).
 
-> **Adresy w tej instrukcji są przykładowe** — to te same wartości, które panel ma wpisane domyślnie:
+> **Panel już u Ciebie działa?** Nie przechodź ścieżek od nowa — nową wersję wgrywasz według sekcji „Aktualizacja panelu” na końcu instrukcji. To dwa polecenia, osoby i ustawienia zostają.
+
+> **Adresy w tej instrukcji są przykładowe:**
 >
 > | Element | Przykład |
 > |---|---|
@@ -15,7 +17,7 @@ Ten przewodnik prowadzi krok po kroku przez instalację panelu na Raspberry Pi (
 > | port WireGuarda | `51820/udp` |
 > | interfejs do internetu | `eth0` |
 >
-> **Podstaw swoje.** Przede wszystkim **podsieć LAN** w Ustawieniach panelu (Krok 9): reguła „cała sieć domowa zablokowana” działa tylko wtedy, gdy panel wie, jaka jest Twoja sieć.
+> **Podstaw swoje.** Sieć domową, adres Pi i interfejs instalator wykrywa sam; port i sieć VPN przy przejęciu bierze z Twojego `wg0.conf`. Sprawdź je w Ustawieniach (Krok 9) — reguła „cała sieć domowa zablokowana” działa tylko wtedy, gdy panel wie, jaka jest Twoja sieć.
 
 # Jak czytać tę instrukcję
 
@@ -25,9 +27,9 @@ Ten przewodnik prowadzi krok po kroku przez instalację panelu na Raspberry Pi (
 |---|---|---|
 | masz już działający serwer WireGuard na Pi (`/etc/wireguard/wg0.conf`) i chcesz go „przejąć” panelem, bez zmian u klientów | **A** | Kroki 1–21 |
 | czysty system, pierwszy raz stawiasz VPN albo zaczynasz od nowa z nowymi kluczami | **B** | Kroki B1–B13, potem 18–21 |
-| czysty system (nowa karta SD, nowe Pi), a masz kopię panelu na NAS-ie i klucz serwera w menedżerze haseł | **C** | Kroki C1–C7, potem 21 |
+| czysty system (nowa karta SD, nowe Pi), a masz kopię panelu na NAS-ie | **C** | Kroki C1–C5, potem 21 |
 
-> **Czym różnią się B i C dla użytkowników.** W B powstaje nowy klucz serwera, więc każda osoba musi dostać nowy plik. W C wracają stary klucz i wszystkie osoby z kopii — nikt niczego nie zmienia u siebie.
+> **Czym różnią się B i C dla użytkowników.** W B powstaje nowy klucz serwera, więc każda osoba musi dostać nowy plik. W C z pełnej kopii wracają stary klucz i wszystkie osoby — nikt niczego nie zmienia u siebie.
 
 Kroki wykonujesz po kolei, bez przeskakiwania. Części V–VII to materiał do sięgania w razie potrzeby.
 
@@ -93,6 +95,8 @@ Masz zobaczyć trzy pliki: `wg0.conf`, `iptables.rules`, `ufw.txt`.
 
 > **Dlaczego:** to Twoja droga powrotna. Gdyby panel Ci nie pasował, opcja `--restore` odinstalowania (część VI) przywraca dokładnie ten stan.
 
+> Instalator robi tę kopię sam, jeśli w `/root/wg-panel-before` jeszcze jej nie ma. Ręczna kopia przed instalacją nie zaszkodzi — instalator jej nie nadpisze.
+
 ## Krok 3 — Zapisz klucz prywatny serwera poza Pi
 
 **Gdzie: Pi, potem menedżer haseł**
@@ -101,9 +105,9 @@ Masz zobaczyć trzy pliki: `wg0.conf`, `iptables.rules`, `ufw.txt`.
 sudo cat /etc/wireguard/server_private.key
 ```
 
-Skopiuj wynik do menedżera haseł (np. Bitwarden, menedżer haseł, KeePass) jako wpis „WireGuard — klucz prywatny serwera".
+Skopiuj wynik do menedżera haseł (np. Bitwarden, KeePassXC, 1Password) jako wpis „WireGuard — klucz prywatny serwera".
 
-> ⚠ Tego klucza nie ma w żadnej kopii panelu — celowo. Jeśli karta SD padnie, a klucza nie będzie nigdzie indziej, wszyscy użytkownicy VPN będą musieli dostać nową konfigurację.
+> ⚠ Klucz jest w **pełnej kopii** panelu (kopia z hasłem — Krok 20), ale nie w podstawowej. Trzymaj go też w menedżerze haseł — gdyby karta SD padła, a nie byłoby ani pełnej kopii, ani klucza, wszyscy użytkownicy VPN musieliby dostać nowe pliki.
 
 
 ## Krok 4 — Pobierz panel na Pi
@@ -209,21 +213,22 @@ Podaj nazwę (np. `admin`) i hasło co najmniej 10 znaków. Pole „Kod z aplika
 
 **Gdzie: Przeglądarka → Ustawienia**
 
-Panel startuje z wartościami przykładowymi (tabela na początku instrukcji). **Zamień je na swoje** i kliknij **Zapisz**:
+Sieć domową, adres Pi i interfejs instalator wykrył sam. Sprawdź je i uzupełnij resztę:
 
 | Pole | Co wpisać |
 |---|---|
-| **Podsieć LAN** | Twoja sieć domowa, np. `192.168.1.0/24` |
+| **Podsieć LAN** | Twoja sieć domowa, np. `192.168.1.0/24` — wykryte przy instalacji |
 | Podsieć VPN | sieć tunelu, np. `10.0.0.0/24` |
 | Adres serwera w VPN | adres Pi w tunelu, np. `10.0.0.1` |
-| **Adres Pi w sieci domowej** | stały adres Pi, np. `192.168.1.10` |
-| Interfejs WAN | interfejs Pi do internetu: `eth0`, `end0`, `wlan0`… (`ip route` pokaże) |
-| Port nasłuchu | port WireGuarda, np. `51820` |
-| Adres NAS | adres Twojego NAS-a (trafia do katalogu hostów jako `nas`) |
-| DNS dla trybu full | np. `9.9.9.9` — Quad9: blokuje złośliwe domeny i nie profiluje zapytań |
-| **Endpoint dla klientów** | publiczny adres i port, pod którym widać Twój dom, np. `83.11.9.240:51820` albo `home.duckdns.org:51820` (na ścieżce A: to samo, co w polu `Endpoint` w plikach klientów) |
+| **Adres Pi w LAN** | stały adres Pi, np. `192.168.1.10` — wykryte przy instalacji |
+| Interfejs WAN | interfejs Pi do internetu: `eth0`, `end0`, `wlan0`… — wykryte przy instalacji |
+| Port nasłuchu | port WireGuarda — domyślnie `51820`; jeśli router przekierowuje inny, popraw (na ścieżce A import w Kroku 11 i tak wpisze go z `wg0.conf`) |
+| DNS trybu full | np. `9.9.9.9` — Quad9: blokuje złośliwe domeny i nie profiluje zapytań |
+| **Endpoint klientów** | publiczny adres i port, pod którym widać Twój dom, np. `203.0.113.10:51820` albo `home.duckdns.org:51820` (na ścieżce A: to samo, co w polu `Endpoint` w plikach klientów) |
 
-> ⚠ **Podsieć LAN musi się zgadzać z Twoją prawdziwą siecią.** Tier NAS kończy się regułą „zablokuj LAN”, a `LAN` to dokładnie ta podsieć z Ustawień. Przy błędnej wartości osoba z tierem NAS nie zostanie zablokowana w Twojej prawdziwej sieci. Po zapisie ustawień sprawdź to symulatorem (Krok 13).
+Kliknij **Zapisz**. Potem zakładka **Hosty**: host `nas` ma mieć adres Twojego NAS-a (instalator podpowiada adres — sprawdź, czy to ten właściwy). Z niego korzysta tier NAS.
+
+> ⚠ **Podsieć LAN musi się zgadzać z Twoją prawdziwą siecią.** Tier NAS kończy się regułą „zablokuj LAN”, a `LAN` to dokładnie ta podsieć z Ustawień. Przy błędnej wartości osoba z tierem NAS nie zostanie zablokowana w Twojej prawdziwej sieci. Sprawdź to symulatorem (Krok 13).
 
 > **Endpoint** trafia tylko do nowych plików i kodów QR, które panel wyda w przyszłości. Obecnych klientów nie zmienia — ale jeśli wpiszesz tu zły adres, każdy nowy użytkownik dostanie niedziałający plik.
 
@@ -290,17 +295,13 @@ Nazwy możesz od razu zmienić na prawdziwe imiona i dopisać urządzenia: `wgct
 
 > **Klucz współdzielony (PSK) jest opcjonalny.** Jeśli Twój `wg0.conf` go nie miał, panel też go nie dopisze i peery działają dalej bez zmian. PSK to dodatkowa warstwa na wypadek komputerów kwantowych — dodasz ją komuś przy okazji rotacji kluczy, bo wtedy i tak dostaje nowy plik.
 
-## Krok 12b — Daj sobie dostęp do panelu przez VPN
+## Krok 12b — Sprawdź, że masz dostęp do panelu przez VPN
 
-**Gdzie: Pi**
+**Gdzie: Przeglądarka → Tiery**
 
-```bash
-wgctl set 10.0.0.2 --panel on
-```
+Przez VPN panel otwierają tylko osoby z tieru, który ma port panelu (`8080`) w polu **Porty na samym Pi**. Domyślnie to tier **ADMIN** (`22,3389,8080`), a Ty jesteś w nim od Kroku 12 — nic nie musisz robić. Sprawdź tylko, że w karcie ADMIN jest `8080`.
 
-W panelu to samo: strona osoby → **Dostęp do panelu przez VPN** → zaznacz → Zapisz.
-
-> **Dlaczego to osobne uprawnienie:** panel jest dostępny z sieci domowej, a przez VPN tylko dla wskazanych osób. Reszta użytkowników dostaje blokadę na porcie panelu, mimo że są w tej samej sieci VPN. Bez tego, będąc poza domem, nie zalogujesz się do panelu.
+> **Dlaczego tak:** panel jest dostępny z sieci domowej, a przez VPN tylko dla wybranych tierów. Reszta użytkowników dostaje blokadę na porcie panelu, mimo że są w tej samej sieci VPN. Bez tego, będąc poza domem, nie zalogujesz się do panelu.
 
 ## Krok 12a — Usuń osoby, które nie mają zostać
 
@@ -450,7 +451,7 @@ sudo cat /etc/wireguard/server_private.key
 
 Skopiuj wynik do menedżera haseł jako „WireGuard — klucz prywatny serwera".
 
-> ⚠ Ten klucz to tożsamość Twojego VPN. Jeśli go stracisz, wszyscy muszą dostać nowe pliki. Jeśli wycieknie — ktoś może podszyć się pod Twój serwer. Nie ma go w kopiach panelu, dlatego drugi egzemplarz musi być w menedżerze haseł.
+> ⚠ Ten klucz to tożsamość Twojego VPN. Jeśli go stracisz, wszyscy muszą dostać nowe pliki. Jeśli wycieknie — ktoś może podszyć się pod Twój serwer. Jest tylko w pełnej kopii panelu (z hasłem kopii), w podstawowej go nie ma — dlatego drugi egzemplarz trzymaj w menedżerze haseł.
 
 ## Krok B4 — Zapora
 
@@ -507,7 +508,7 @@ Wykonaj **Krok 7** i **Krok 8** ze ścieżki A.
 
 **Gdzie: Przeglądarka → Ustawienia**
 
-Tak jak **Krok 9** ze ścieżki A. Najważniejsze pole to **Endpoint dla klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820`. Sprawdź też **Adres Pi w sieci domowej**: `192.168.1.10`.
+Tak jak **Krok 9** ze ścieżki A. Najważniejsze pola to **Endpoint klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820` — i **Port nasłuchu**: ten sam, który przekierowuje router (domyślny `51820`). Sprawdź też **Adres Pi w LAN**.
 
 ## Krok B10 — Dodaj osoby
 
@@ -567,78 +568,96 @@ Po minucie połącz się telefonem przez VPN i otwórz `https://10.0.0.1:8080` �
 
 # ŚCIEŻKA C — nowy system z kopii panelu
 
-Odtwarzasz wszystko na czystej karcie: ten sam klucz serwera, te same osoby, te same klucze. Nikt z użytkowników niczego nie zmienia.
+Odtwarzasz wszystko na czystej karcie jednym poleceniem. Co dokładnie wróci, zależy od tego, **jaką kopię masz** na NAS-ie:
 
-Potrzebujesz: klucza serwera z menedżera haseł, hasła kopii z menedżera haseł, danych użytkownika `wg-backup` na NAS.
+| Kopia | Skąd się bierze | Co wraca |
+|---|---|---|
+| **pełna** (plik `….json.enc`, na liście kopii „pełna") | każda kopia zrobiona z ustawionym **hasłem kopii** | wszystko: osoby, ustawienia, konta, hasła do NAS-a i ntfy, historia, **klucz serwera** i **certyfikat HTTPS**. Nikt z użytkowników niczego nie zmienia |
+| **podstawowa** (bez hasła albo ze starszej wersji panelu) | kopia bez hasła albo sprzed wersji z pełnymi kopiami | osoby, tiery, reguły, ustawienia. **Klucza serwera w niej nie ma** — instalator zapyta o niego |
 
-## Krok C1 — System, pakiety i klucz serwera
+Potrzebujesz: **hasła kopii** z menedżera haseł i danych konta `wg-backup` na NAS-ie. Przy kopii podstawowej dodatkowo **klucza serwera** z menedżera haseł — jeśli go nie masz, da się, ale każda osoba dostanie nowy plik (Krok C5).
+
+> **Klucz serwera** to tożsamość Twojego VPN — jest wpisany w plik każdej osoby. Z innym kluczem serwera dotychczasowe pliki nie zadziałają: telefon „puka”, a Pi nie odpowiada.
+
+## Krok C1 — System
 
 **Gdzie: Komputer, Pi**
 
-1. Wykonaj **Kroki B1 i B2**.
-2. Zamiast generować nowy klucz — wklej stary z menedżera haseł:
+1. Wykonaj **Krok B1** (Raspberry Pi OS Lite). Ustaw **tę samą nazwę Pi** co wcześniej — wtedy certyfikat HTTPS z kopii pasuje i telefony nie potrzebują nowego `ca.crt`.
+2. Na routerze Pi ma dostać **ten sam adres** co wcześniej (rezerwacja DHCP) — na niego kieruje przekierowanie portu WireGuarda.
+3. Zapora: **Krok B4**.
+
+WireGuarda i iptables nie musisz instalować — instalator doinstaluje je sam.
+
+## Krok C2 — Odtworzenie
+
+**Gdzie: Pi**
 
 ```bash
-sudo mkdir -p /etc/wireguard
-sudo chmod 700 /etc/wireguard
-sudo nano /etc/wireguard/server_private.key
-sudo chmod 600 /etc/wireguard/server_private.key
-wg pubkey < <(sudo cat /etc/wireguard/server_private.key)
+sudo apt install -y git
+git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
+cd ~/wg-panel
+sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh --restore
 ```
 
-W `nano` wklej klucz, zapisz (`Ctrl+O`, `Enter`), wyjdź (`Ctrl+X`). Ostatnia komenda wypisze klucz publiczny — porównaj z linią `PublicKey` w pliku dowolnego klienta. Muszą być identyczne.
+`LAN_ACCESS` podaj taki, jak przy poprzedniej instalacji (albo pomiń, jeśli panel był dostępny tylko przez VPN).
 
-> ⚠ Jeśli klucze publiczne się różnią, wklejony klucz jest zły. Nie idź dalej — z innym kluczem żaden klient się nie połączy.
+Instalator zapyta po kolei:
 
-## Krok C2 — Zapora i router
+| Pytanie | Wpisz |
+|---|---|
+| Adres NAS-a | np. `192.168.1.11` |
+| Udział | `backup` (Enter) |
+| Katalog na udziale | katalog, w którym leżą kopie (Enter = `wg-panel`) |
+| Użytkownik / hasło do NAS-a | `wg-backup` / hasło z menedżera haseł (nie będzie widoczne) |
+| Którą odtworzyć | Enter = najnowsza (pokaże listę) |
+| Hasło kopii | z menedżera haseł |
 
-**Gdzie: Pi, router**
+Masz zobaczyć: „pełna kopia, N osób. Klucz serwera i certyfikat są na miejscu”, potem zwykłą instalację, „Tunel podniesiony” i na końcu „Odtworzone z pełnej kopii: zaloguj się swoim dotychczasowym kontem”.
 
-Wykonaj **Krok B4**. Jeśli zmienił się router albo adres Pi — także **Krok B5**.
+Gdy coś się nie zgadza, instalator mówi wprost, co poprawić:
 
-## Krok C3 — Panel
+| Komunikat | Co zrobić |
+|---|---|
+| NAS odrzucił login albo hasło | literówka w haśle albo nazwie konta; w panelu NAS-a sprawdź, czy konto nie jest wyłączone i czy adres Pi nie trafił na listę zablokowanych (np. automatyczna blokada adresów) |
+| na udziale backup nie ma katalogu … — są tam: … | uruchom ponownie i wpisz jeden z wypisanych katalogów |
+| na NAS nie ma udziału … | zła nazwa udziału — taka jak folder współdzielony na NAS-ie |
+| NAS nie odpowiada pod adresem … | zły adres albo SMB wyłączone na NAS-ie |
+| nie udało się otworzyć kopii | złe hasło kopii |
 
-**Gdzie: Komputer, Pi, Przeglądarka**
+> **Kopia bez klucza serwera** (podstawowa albo ze starszej wersji): instalator napisze to wprost i zapyta: **1) wklej stary klucz** (z menedżera haseł — wszyscy łączą się dalej starymi plikami) albo **2) wygeneruj nowy** (osoby i ustawienia wrócą, ale każda osoba dostanie nowy plik — Krok C5).
 
-Wykonaj **Kroki B6, B7 i B8**. Konto, które teraz założysz, jest tymczasowe — w następnym kroku zastąpią je konta z kopii.
+> **Z panelu zamiast z instalatora:** gdy panel jest już zainstalowany — **Kopie**, na dole strony w **Ustawieniach kopii** wpisz dane NAS-a i **Zapisz ustawienia**, potem na **Liście kopii** kliknij **Odśwież listę z NAS**. Zaznacz kopię (kliknięcie w wiersz), **Odtwórz zaznaczoną…** — w oknie zaznacz **Logowanie starym hasłem**, wpisz hasło kopii i **Odtwórz kopię**. Panel po odtworzeniu powie, czy klucz serwera wrócił z kopii i czy dotychczasowe pliki osób zadziałają.
 
-## Krok C4 — Odtwórz z NAS
+## Krok C3 — Sprawdź
 
-**Gdzie: Przeglądarka → Kopie**
+**Gdzie: Przeglądarka, Telefon**
 
-1. W ustawieniach kopii wpisz dane NAS (adres `192.168.1.11`, udział `backup`, katalog `wg-panel`, użytkownik `wg-backup` z hasłem) i **hasło kopii** z menedżera haseł. **Zapisz.**
-2. Kliknij **Pokaż też kopie leżące na NAS**.
-3. W sekcji „Pobierz albo odtwórz" wybierz najnowszą kopię oznaczoną „na NAS", wpisz hasło kopii, zaznacz **Odtwórz także konta**, kliknij **Odtwórz**.
-4. Panel wyloguje Cię — zaloguj się **starym** hasłem do panelu (z menedżera haseł).
+1. Otwórz `https://<adres-pi>:8080` — bez ostrzeżenia o certyfikacie (jeśli nazwa Pi się zgadza), zaloguj się **dotychczasowym** kontem.
+2. **Ustawienia → Klucz publiczny serwera** ma być taki sam jak `PublicKey` w sekcji `[Peer]` pliku na Twoim telefonie.
+3. Telefon na danych komórkowych (Wi-Fi wyłączone), włącz tunel. Na liście peerów przy Tobie pojawi się handshake „X s temu”.
 
-Z terminala to samo:
+Jeśli tunel się nie łączy — **CZĘŚĆ VI, „VPN nie łączy się po odtworzeniu”**.
+
+## Krok C4 — Restart
+
+**Gdzie: Pi**
 
 ```bash
-wgctl restore --nas
-wgctl restore --nas wg-panel-RRRRMMDD-GGMMSS.json.enc --with-users
+sudo reboot
 ```
 
-> **Panel sprawdza kopię przed odtworzeniem:** pobiera obok niej plik `.sha256` i porównuje sumę. Podmienionej albo uszkodzonej kopii nie odtworzy. Hasła do NAS i hasło kopii nie są zapisane w kopii — dlatego wpisujesz je w punkcie 1 i one zostają.
+Po minucie VPN ma działać bez dotykania czegokolwiek, a **Integralność → Sprawdź teraz** — bez uwag.
 
-## Krok C5 — Sprawdź ustawienia
+## Krok C5 — Tylko z nowym kluczem: nowe pliki dla wszystkich
 
-**Gdzie: Przeglądarka → Ustawienia**
+Jeśli w Kroku C2 wygenerowałeś nowy klucz serwera:
 
-Ustawienia wróciły z kopii. Sprawdź **Endpoint** i **Adres Pi w sieci domowej** — jeśli zmienił się router albo adres Pi, popraw.
+1. **Zapisz go od razu w menedżerze haseł** (`sudo cat /etc/wireguard/server_private.key`) i ustaw **hasło kopii** — od teraz kopie są pełne i ten krok nigdy się nie powtórzy.
+2. Przy każdej osobie: **Rotacja kluczy**, potem raz **Zastosuj zmiany** i **Potwierdzam, działa**.
+3. Rozdaj pliki: każdy **usuwa stary tunel** z aplikacji i importuje nowy (QR albo **Kopiuj plik** / link jednorazowy) — na jednym urządzeniu.
 
-## Krok C6 — Podnieś tunel
-
-**Gdzie: Przeglądarka, Pi**
-
-Tak jak **Krok B11**: Zastosuj zmiany, sprawdź `wg show`, na pasku **Potwierdzam, działa**. W podglądzie zobaczysz wszystkie osoby z kopii.
-
-## Krok C7 — Test i restart
-
-**Gdzie: Telefon, Pi**
-
-Tak jak **Krok B13**. Osoby łączą się ze swoimi starymi plikami — nikt niczego nie zmienia.
-
-**Dalej: Krok 21** (kontrola). Powiadomienia i harmonogram kopii wróciły z kopii — sprawdź tylko w zakładce Alerty, czy testowy alert dochodzi.
+**Dalej: Krok 21** (kontrola). Powiadomienia i harmonogram kopii wróciły z kopii — sprawdź w Alertach, czy testowy alert dochodzi.
 
 ---
 
@@ -723,41 +742,53 @@ Poniższe kroki opisują Synology DSM jako przykład; na innym NAS-ie zrób odpo
 
 Program do wysyłania na NAS (`smbclient`) instaluje instalator. Jeśli masz panel z wcześniejszej wersji, najpierw zainstaluj go ponownie (Krok 5 — dane zostają), bo starsza wersja ani go nie instalowała, ani nie mogła go uruchomić.
 
-W panelu, sekcja **Harmonogram i cel**:
+Strona **Kopie** ma trzy części: u góry **stan** (jaka kopia powstaje, kiedy automatycznie, jak poszła ostatnia) i **Zrób kopię teraz – gdzie?**, w środku **Lista kopii**, na dole **Ustawienia kopii**. Na dole, w **Ustawieniach kopii**:
 
 | Pole | Wpisz |
 |---|---|
-| Rób kopie automatycznie | zaznaczone |
+| Rób kopie automatycznie, codziennie | zaznaczone |
 | O godzinie | `03:30` |
-| Trzymaj ostatnie | `14` |
-| Cel | NAS przez SMB |
-| Hasło kopii | **długie, losowe — zapisz w menedżerze haseł** |
-| Adres | `192.168.1.11` |
+| Dokąd | tylko NAS |
+| Hasło kopii | **co najmniej 12 znaków, losowe — zapisz w menedżerze haseł** |
+| NAS: Adres | np. `192.168.1.11` |
 | Udział | `backup` |
-| Katalog | `wg-panel` |
-| Użytkownik / hasło | `wg-backup` / hasło z Kroku 19 |
+| Katalog na udziale | `wg-panel` |
+| Użytkownik / Hasło | `wg-backup` / hasło z Kroku 19 |
+| Na Pi: Katalog kopii na Pi | zostaw pusty (domyślny) |
+| Na Pi trzymaj ostatnie | `14` |
 
-**Zapisz.** U góry strony są dwa przyciski: **Kopia lokalnie** i **Kopia na NAS**. Każdy robi jedną kopię dokładnie tam, gdzie mówi — pole **Cel** dotyczy tylko kopii automatycznych (pod nagłówkiem widać, dokąd i o której idą). Kliknij **Kopia na NAS**.
+**Zapisz ustawienia.** U góry strony, pod **Zrób kopię teraz – gdzie?**, są trzy przyciski: **Na NAS**, **Na Pi** i **Na ten komputer**. Każdy robi jedną kopię dokładnie tam i nigdzie więcej; pole **Dokąd** dotyczy tylko kopii automatycznych. Kliknij **Na NAS**.
 
-Masz zobaczyć: w tabeli nowy wiersz z celem `smb`, wynikiem `ok` i w kolumnie **Weryfikacja** — `zgodna`. Na NAS, w udziale `backup/wg-panel`, pojawią się dwa pliki: kopia i jej `.sha256`.
+Masz zobaczyć: u góry trzy zielone kropki — **Rodzaj kopii: PEŁNA, zaszyfrowana**, **Automatycznie: codziennie o 03:30 → tylko NAS** i **Ostatnia kopia: … → NAS** z dopiskiem „suma zgodna”. Na **Liście kopii** nowy wiersz: Gdzie „NAS”, Rodzaj „pełna”, Stan „sprawdzona”. Na NAS-ie, w udziale `backup/wg-panel`, pojawią się dwa pliki: kopia i jej `.sha256`.
+
+**Gdzie ląduje kopia** — decydujesz Ty; panel nie robi dodatkowych kopii po cichu:
+
+| Wybór | Gdzie leży kopia |
+|---|---|
+| tylko NAS | tylko na NAS-ie — plik na Pi powstaje na chwilę do wysłania i zaraz znika (także gdy wysyłka się nie uda) |
+| tylko Pi | w katalogu kopii na Pi (najwyżej ostatnie 14) — nie chroni przed awarią karty |
+| NAS i Pi (dwie kopie) | w obu miejscach — odtworzenie bierze plik z Pi i nie musi budzić NAS-a |
+| Na ten komputer (tylko przycisk) | plik pobiera przeglądarka; panel go nie przechowuje i nie ma go na liście |
 
 Jeśli kopia się nie udała, czerwony pasek pokaże powód:
 
 | Komunikat | Co zrobić |
 |---|---|
-| brak adresu albo udziału NAS | uzupełnij **NAS: adres** i **Udział** w Harmonogramie i celu, **Zapisz** |
-| brak użytkownika albo hasła NAS | uzupełnij **Użytkownik** i **Hasło** w Harmonogramie i celu, **Zapisz** |
+| brak adresu albo udziału NAS | uzupełnij **Adres** i **Udział** w Ustawieniach kopii, **Zapisz ustawienia** |
+| brak użytkownika albo hasła NAS | uzupełnij **Użytkownik** i **Hasło** w Ustawieniach kopii, **Zapisz ustawienia** |
 | brak smbclient | zainstaluj panel ponownie (Krok 5) albo `sudo apt install -y smbclient` |
-| `Could not determine network interfaces` | panel z wcześniejszej wersji — zainstaluj ponownie (Krok 5); nowa wersja pozwala `smbclient` odczytać listę interfejsów |
-| `NT_STATUS_LOGON_FAILURE` | złe hasło albo nazwa użytkownika `wg-backup` |
-| `NT_STATUS_BAD_NETWORK_NAME` | zła nazwa udziału — ma być dokładnie taka jak folder współdzielony w DSM (`backup`) |
-| `NT_STATUS_OBJECT_NAME_NOT_FOUND` albo `…PATH_NOT_FOUND` | w udziale nie ma katalogu `wg-panel` — utwórz go w File Station |
-| `NT_STATUS_ACCESS_DENIED` | `wg-backup` nie ma prawa zapisu do `backup` — Panel sterowania → Folder współdzielony → Uprawnienia |
-| `NT_STATUS_IO_TIMEOUT` albo `NT_STATUS_CONNECTION_REFUSED` | usługa SMB wyłączona w DSM (Panel sterowania → Usługi plików → SMB) albo zły adres NAS |
+| NAS odrzucił login albo hasło (`NT_STATUS_LOGON_FAILURE`) | złe hasło albo nazwa użytkownika `wg-backup`; w panelu NAS-a sprawdź, czy konto nie jest wyłączone, a adres Pi zablokowany |
+| na udziale … nie ma katalogu … — są tam: … | wpisz w **Katalog na udziale** jeden z wypisanych katalogów albo utwórz katalog na NAS-ie |
+| `NT_STATUS_BAD_NETWORK_NAME` | zła nazwa udziału — ma być dokładnie taka jak folder współdzielony na NAS-ie (`backup`) |
+| `NT_STATUS_OBJECT_NAME_NOT_FOUND` albo `…PATH_NOT_FOUND` | w udziale nie ma katalogu `wg-panel` — utwórz go |
+| `NT_STATUS_ACCESS_DENIED` | `wg-backup` nie ma prawa zapisu do `backup` — popraw uprawnienia folderu na NAS-ie |
+| `NT_STATUS_IO_TIMEOUT` albo `NT_STATUS_CONNECTION_REFUSED` | usługa SMB wyłączona na NAS-ie albo zły adres |
 
-> ⚠ Bez hasła kopii klucze wszystkich osób trafią na NAS jawnym tekstem. Z hasłem kopia jest szyfrowana i bezużyteczna dla kogoś, kto dobierze się do dysku. Zgubione hasło kopii = kopia nie do odczytania, dlatego menedżer haseł.
+> **Hasło kopii robi z kopii pełną kopię.** Z hasłem kopia jest zaszyfrowana i zawiera wszystko: osoby, ustawienia, konta, hasła do NAS-a i ntfy, historię, **klucz serwera** i **certyfikat HTTPS** — po awarii odtworzysz z niej całe Pi jednym poleceniem (ścieżka C), a nikt z użytkowników niczego nie zmienia. Bez hasła kopia jest podstawowa i jawna (bez kluczy i haseł) — panel pokazuje to na górze strony Kopie czerwoną kropką „Rodzaj kopii: PODSTAWOWA, jawna”.
 
-> **„Zgodna" znaczy:** panel pobrał kopię z powrotem z NAS, policzył sumę kontrolną, porównał z zapisaną i otworzył plik hasłem. Obok każdej kopii leży plik `.sha256`, więc możesz ją sprawdzić także bez panelu.
+> ⚠ Pełna kopia zawiera tożsamość Twojego VPN. Dlatego hasło **długie i losowe**, trzymane tylko w menedżerze haseł (panel ostrzeże przy krótszym niż 12 znaków), a konto `wg-backup` z dostępem tylko do udziału `backup`. Zgubione hasło kopii = kopia nie do odczytania.
+
+> **„Sprawdzona” znaczy:** panel pobrał kopię z powrotem z NAS-a, policzył sumę kontrolną, porównał z zapisaną i otworzył plik hasłem. Obok każdej kopii leży plik `.sha256`, więc możesz ją sprawdzić także bez panelu.
 
 ## Krok 21 — Sprawdź, że wszystko gra
 
@@ -969,21 +1000,46 @@ Po potwierdzeniu, że działa: **Wydano — skasuj klucz**. Panel zapamiętuje p
 
 ## Odtworzenie z kopii
 
-**Przeglądarka → Kopie → Pobierz albo odtwórz.** Na liście **Kopia** są wszystkie kopie z historii — z karty i z NAS — z datą i wynikiem weryfikacji. Wybierz jedną, wpisz hasło kopii i kliknij **Odtwórz**.
+**Przeglądarka → Kopie → Lista kopii.** Każda kopia jest na liście raz — z datą, miejscem (NAS / Pi / NAS + Pi), rodzajem (pełna / zaszyfrowana / podstawowa / nieudana) i stanem sumy kontrolnej. Kopie leżące tylko na NAS-ie (np. na nowym systemie) dojdą po kliknięciu **Odśwież listę z NAS** — to jedyny przycisk, który pyta NAS o listę, i panel nie robi tego w tle (NAS może spać).
+
+**Co znaczą oznaczenia na liście kopii** (to samo jest w panelu pod listą, w „Co znaczą oznaczenia?”):
+
+| Rodzaj | Znaczy |
+|---|---|
+| **pełna** | wszystko, razem z kluczem serwera — **po awarii odtwarzaj najnowszą taką** |
+| **sprzed odtworzenia** | zapisana sama tuż przed odtworzeniem — do cofnięcia pomyłki |
+| **sprzed aktualizacji** | zapisana przez instalator tuż przed aktualizacją panelu |
+| **znaleziona** | leżała na NAS-ie albo na Pi, panel jej nie robił (np. sprzed reinstalacji) |
+| **podstawowa** | bez klucza serwera, haseł i historii — zrobiona bez hasła kopii |
+| **pełna bez klucza** | pełna, ale bez klucza serwera (helper wtedy nie odpowiadał) — rzadkie |
+
+| Stan | Znaczy |
+|---|---|
+| **sprawdzona** | plik ma tę samą sumę SHA-256 co przy zapisie |
+| niesprawdzona | jeszcze nie sprawdzana — zaznacz i kliknij **Sprawdź zaznaczone** |
+| **uszkodzona** | plik zmieniony albo uszkodzony — panel go nie odtworzy |
+| **nieudana** | kopia się nie zapisała (powód po najechaniu myszką) |
+| **brak pliku** | pliku już nie ma (usunięty na NAS-ie albo sprzątnięty z Pi) — wpis usuń |
+
+„NAS + Pi” w kolumnie **Gdzie** znaczy, że plik jest w obu miejscach — odtworzenie bierze go wtedy z Pi.
+
+> Rodzaj kopii wynika z **hasła kopii**: z hasłem każda nowa kopia jest pełna i zaszyfrowana, bez hasła — podstawowa. Osobnego przełącznika nie ma: pełna kopia bez szyfrowania położyłaby klucz serwera jawnym tekstem na NAS-ie.
+
+Zaznacz jedną kopię — kliknięcie w wiersz zaznacza ją, drugie kliknięcie odznacza — i kliknij **Odtwórz zaznaczoną…**. Otworzy się okno z datą kopii i informacją, czy to pełna kopia (wraca klucz serwera — stare pliki osób działają), czy kopia bez klucza. W oknie jest pole **Hasło kopii** (puste = hasło z ustawień) i **Logowanie starym hasłem**. Kliknij **Odtwórz kopię**.
 
 Co panel robi po kliknięciu:
 
-1. pobiera plik — jeśli leży na NAS, sam go ściąga;
+1. bierze plik — z Pi, jeśli tam jest (kopia „NAS + Pi” albo „Pi”), a jeśli leży tylko na NAS-ie, sam go ściąga;
 2. sprawdza sumę kontrolną — podmienionej albo uszkodzonej kopii nie odtworzy;
 3. otwiera ją hasłem — złe hasło kończy się tutaj, nic się nie zmienia;
-4. zapisuje **obecny stan** jako osobną kopię („stan sprzed odtworzenia");
+4. zapisuje **obecny stan** jako osobną kopię (na liście z plakietką „sprzed odtworzenia”);
 5. dopiero wtedy podmienia osoby, tiery, reguły i katalog hostów.
 
-Potem **Zastosuj zmiany**. Gdyby odtworzenie okazało się pomyłką — wybierz z listy kopię oznaczoną „stan sprzed odtworzenia" i odtwórz ją.
+Potem **Zastosuj zmiany**. Gdyby odtworzenie okazało się pomyłką — zaznacz na liście kopię z plakietką „sprzed odtworzenia” i odtwórz ją.
 
 Z terminala: `wgctl restore` pokazuje listę, `wgctl restore 12` odtwarza kopię nr 12.
 
-> **„Odtwórz także konta"** zaznaczaj tylko na nowej karcie SD. Na działającym panelu zostaw odznaczone, żeby nie zmienić sobie hasła do logowania.
+> **„Logowanie starym hasłem”** zaznaczaj tylko na nowym systemie — wraca wtedy Twoje dotychczasowe konto panelu (login, hasło, kod z aplikacji), a panel Cię wyloguje. Na działającym panelu zostaw odznaczone, żeby nie zmienić sobie hasła do logowania.
 
 ## Test kopii zapasowej
 
@@ -993,8 +1049,8 @@ Kopia, której nie próbowałeś odtworzyć, to tylko nadzieja. Są dwa poziomy.
 
 **Gdzie: Przeglądarka → Kopie, potem Pi**
 
-1. **Kopia lokalnie** i **Kopia na NAS** — mają się pojawić dwa nowe wiersze (cel `local` i `smb`) z wynikiem `ok`.
-2. **Sprawdź kopie** — panel pobiera pliki z miejsca, w którym leżą (także z NAS), i porównuje sumy SHA-256. Każdy wiersz ma być **zgodna**.
+1. Pod **Zrób kopię teraz** kliknij **Na Pi**, potem **Na NAS** — na Liście kopii mają się pojawić dwa nowe wiersze (Gdzie „Pi” i „NAS”).
+2. Zaznacz oba i kliknij **Sprawdź zaznaczone** — panel pobiera pliki z miejsca, w którym leżą (także z NAS-a), i porównuje sumy SHA-256. Każdy wiersz ma mieć stan **sprawdzona**.
 3. Na Pi:
 
 ```bash
@@ -1006,12 +1062,12 @@ Masz zobaczyć: kopie `OK` i listę kopii leżących na NAS (to ta sama lista, z
 
 ### Pełny test (około godziny, na zapasowej karcie SD)
 
-Sprawdza to, co naprawdę ma znaczenie: czy z kopii i klucza z menedżera haseł da się postawić panel od zera. Robisz to na **zapasowej karcie** — obecna karta zostaje nietknięta.
+Sprawdza to, co naprawdę ma znaczenie: czy z kopii na NAS-ie da się postawić Pi od zera. Robisz to na **zapasowej karcie** — obecna karta zostaje nietknięta.
 
-1. Włóż do Pi zapasową kartę z czystym Raspberry Pi OS (albo użyj drugiego Pi) i przejdź ścieżkę C: kroki **C1–C5**. Klucz serwera weź z menedżera haseł — przy okazji sprawdzasz, że kopia klucza jest aktualna.
-2. **Zaraz po odtworzeniu (C4), zanim zrobisz cokolwiek innego:**
+1. Wyłącz Pi, włóż zapasową kartę z czystym Raspberry Pi OS (albo użyj drugiego Pi) i przejdź ścieżkę C: kroki **C1–C2** (`install.sh --restore`). Przy okazji sprawdzasz, że hasło kopii w menedżerze haseł jest aktualne.
+2. **Zaraz po odtworzeniu, zanim zrobisz cokolwiek innego:**
    - Alerty → kanał **wyłączone** — inaczej testowe Pi wysyłałoby powiadomienia na Twój temat ntfy.
-   - Kopie → odznacz **Rób kopie automatycznie, codziennie**. Kopie nie zawierają haseł, ale hasło do NAS podane przy odtwarzaniu (C4) zostaje w testowym panelu — bez tego odznaczenia testowe Pi zapisywałoby kopie do tego samego folderu i mogłoby usuwać starsze przy rotacji.
+   - Kopie → Ustawienia kopii → odznacz **Rób kopie automatycznie, codziennie** i **Zapisz ustawienia** — pełna kopia przywróciła też hasło do NAS-a, więc testowe Pi zapisywałoby kopie do tego samego folderu i mogłoby usuwać starsze przy rotacji.
 3. Sprawdź, że wszystko wróciło:
 
 ```bash
@@ -1021,20 +1077,22 @@ wgctl diff
 
 Masz zobaczyć: te same osoby, tiery i nazwy co na prawdziwym Pi (porównaj z `wgctl list` na nim), a `wgctl diff` pokazuje wygenerowaną konfigurację bez błędów.
 
-4. **Nie wykonuj kroku C6 (podniesienie tunelu)** i nie rozdawaj plików z testowego Pi — ma te same klucze co prawdziwe.
+4. Możesz sprawdzić z telefonu, że VPN działa ze starym plikiem (Krok C3) — to najlepszy dowód, że kopia jest pełna. Nie rozdawaj plików z testowego Pi — ma te same klucze co prawdziwe.
 5. Wyłącz testowe Pi i włóż z powrotem właściwą kartę. Zapasową kartę wyczyść albo odłóż jako gotową kopię systemu (wtedy trzymaj ją bezpiecznie — jest na niej klucz serwera).
 
-> ⚠ Jeśli coś w pełnym teście nie zadziała — brakuje klucza w menedżerze haseł, kopia się nie odtwarza, lista osób się nie zgadza — napraw to **teraz**. Po prawdziwej awarii karty będzie za późno.
+> ⚠ Jeśli coś w pełnym teście nie zadziała — kopia się nie odtwarza, instalator mówi „kopia BEZ klucza serwera”, lista osób się nie zgadza — napraw to **teraz** (zwykle: ustaw hasło kopii i zrób nową kopię). Po prawdziwej awarii karty będzie za późno.
 
 ## Usuwanie kopii
 
 **Gdzie: Przeglądarka → Kopie**
 
-Zaznacz kopie w pierwszej kolumnie (**Zaznacz nieudane** zaznacza od razu wszystkie z wynikiem „błąd") i kliknij **Usuń zaznaczone**. Panel usuwa pliki kopii razem z `.sha256` — z karty i z NAS — i dopiero potem wpis z listy. Jeśli pliku nie da się usunąć (np. NAS jest wyłączone), wpis zostaje, żeby nie zgubić śladu po pliku, który dalej tam leży.
+Zaznacz kopie na Liście kopii (kliknięcie w wiersz; kwadracik w nagłówku zaznacza wszystkie, **Zaznacz nieudane** — wszystkie nieudane) i kliknij **Usuń zaznaczone**. Panel usuwa pliki kopii razem z `.sha256` — z Pi i z NAS-a — i dopiero potem wpis z listy. Jeśli pliku nie da się usunąć (np. NAS jest wyłączony), wpis zostaje, żeby nie zgubić śladu po pliku, który dalej tam leży.
 
-> **„Trzymaj ostatnie" sprząta tylko katalog na karcie.** Kopie na NAS zostają, dopóki ich nie usuniesz — jedna ma kilka KB, więc nawet codzienne kopie przez rok to około 2 MB.
+> **Kopie sprzed reinstalacji** (zrobione przez poprzedni system) panel na początku nie zna — widać je dopiero po **Odśwież listę z NAS**. Wtedy trafiają na listę jako „znaleziona” i można je sprawdzić, odtworzyć albo usunąć jak każdą inną. Odwrotnie: kopia, której pliku po odświeżeniu listy nie ma już na NAS-ie (np. usunięta ręcznie), dostaje stan „brak pliku” — jej wpis po prostu usuń.
 
-> ⚠ Zostaw zawsze przynajmniej jedną kopię z weryfikacją „zgodna" — najlepiej na NAS.
+> **„Na Pi trzymaj ostatnie” sprząta tylko Pi.** Kopie na NAS-ie zostają, dopóki ich nie usuniesz — jedna ma kilka KB, więc nawet codzienne kopie przez rok to około 2 MB.
+
+> ⚠ Zostaw zawsze przynajmniej jedną pełną kopię w stanie „sprawdzona” — najlepiej na NAS-ie.
 
 ## Inne częste czynności
 
@@ -1054,9 +1112,21 @@ Każda zmiana w ustawieniach, osobach i regułach czeka, aż klikniesz **Zastosu
 
 ## Nazwy urządzeń zamiast adresów
 
-Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `vault = 192.168.1.x` (menedżer haseł) itd. W regułach używasz nazw. Zmiana adresu w jednym miejscu przestawia wszystkie reguły.
+Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `kamera = 192.168.1.80` itd. W regułach używasz nazw. Zmiana adresu w jednym miejscu przestawia wszystkie reguły.
 
 > ⚠ Ustaw urządzeniom z katalogu stałe adresy (rezerwacja DHCP na routerze). Katalog tylko tłumaczy nazwę na adres — jeśli urządzenie samo zmieni IP, reguła wskaże w pustkę.
+
+## Jak długo panel pamięta historię
+
+| Co | Jak długo | Gdzie zmienić |
+|---|---|---|
+| Dziennik (kto, co i kiedy zmienił) | 90 dni (przy aktualizacji ze starszej wersji zostaje dotychczasowe 7) | Ustawienia → **Zaawansowane** → **Dziennik [dni]** |
+| Alerty | 90 dni (przy aktualizacji ze starszej wersji zostaje dotychczasowe 7) | Ustawienia → **Zaawansowane** → **Alerty [dni]** |
+| Wykresy ruchu | ostatnie 7 dni | nie zmienia się |
+
+Wpisane `0` znaczy **bez limitu** — panel niczego z tej listy nie kasuje. Baza rośnie wtedy powoli: dziennik to zwykle kilka–kilkanaście wpisów dziennie, alerty jeszcze mniej. Wpisy starsze niż ustawiona liczba dni panel usuwa raz na dobę. Ile dni obowiązuje, widać też na stronach Dziennik i Alerty.
+
+> **Rada:** alerty ustaw na 90 albo 365 dni. Alert „zmiana adresu” sprzed miesiąca bywa jedynym śladem, skąd ktoś się łączył. Pełna kopia i tak zabiera całą historię ze sobą.
 
 ## Co jakiś czas
 
@@ -1066,7 +1136,7 @@ Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `vault = 192.168.1.x` 
 | raz w miesiącu | `wgctl list` — czy znasz wszystkie osoby na liście |
 | raz w miesiącu | zakładka Alerty i wykresy ruchu |
 | raz w miesiącu | Alerty → **Wyślij testowy alert** — czy powiadomienia nadal dochodzą |
-| raz na kwartał | Kopie → Sprawdź kopie — wszystkie „zgodna" |
+| raz na kwartał | Kopie → kwadracik w nagłówku listy (zaznacz wszystkie) → **Sprawdź zaznaczone** — wszystkie „sprawdzona” |
 | raz na pół roku | pełny test kopii na zapasowej karcie (CZĘŚĆ V) |
 
 > ⚠ `ufw reload` przestawia kolejność reguł i odpina łańcuchy panelu. Po każdym reloadzie restart `wg-quick`. To najczęstsza przyczyna „wczoraj działało, dziś nie".
@@ -1083,8 +1153,10 @@ Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `vault = 192.168.1.x` 
 | bezpiecznik nie pomógł | z domu przez SSH: `wgctl rollback` |
 | panel nie odpowiada, VPN działa | `sudo systemctl restart wg-panel` |
 | czerwony baner „zmieniona poza panelem" | sekcja niżej |
-| alarm o niezgodnej kopii | Kopie → Sprawdź kopie, zrób nową kopię, sprawdź, kto ma dostęp do folderu `backup` |
+| alarm o niezgodnej kopii | Kopie → zaznacz kopie → **Sprawdź zaznaczone**, zrób nową kopię, sprawdź, kto ma dostęp do folderu `backup` |
 | alarm o nietypowym ruchu | strona osoby → wykres; jeśli to nie ona — rotacja kluczy |
+| po restarcie Pi integralność: „pierwsza reguła FORWARD to nie skok do WG-USERS” | Docker wstawił swoje reguły przed panel — tak było w starszych wersjach panelu. Zaktualizuj panel i raz kliknij **Zastosuj zmiany** (sekcja „Konfiguracja zmieniona poza panelem”) |
+| po restarcie Pi „Handshake nigdy” i ruch 0 | starsza wersja panelu — obecna pamięta ostatni handshake i ruch łącznie w bazie; zaktualizuj panel |
 | zgubiony telefon z kodem logowania | `wgctl totp off admin` |
 | `wgctl`: „jesteś już w grupie wg-panel, ale ta sesja…" | wyloguj się i zaloguj ponownie albo `newgrp wg-panel` |
 | `wgctl`: „brak dostępu … dodaj się do grupy" | `sudo usermod -aG wg-panel $USER`, potem jak wyżej (ponowna instalacja robi to sama) |
@@ -1095,11 +1167,32 @@ Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `vault = 192.168.1.x` 
 | „interfejs WireGuard: problem" | **użytkownicy nie mają dostępu** — `systemctl status wg-quick@wg0`, potem `sudo systemctl restart wg-quick@wg0` |
 | „zasilanie Pi" | za słaby zasilacz albo kabel — wymień na oryginalny (5 V, 3 A dla Pi 4 / 5 A dla Pi 5); grozi uszkodzeniem karty |
 | „temperatura Pi" | sprawdź chłodzenie i czy obudowa nie stoi w zamkniętej szafce |
-| „miejsce na karcie" | `df -h`; zmniejsz „Trzymaj ostatnie" w Kopiach albo przenieś kopie na NAS |
+| „miejsce na karcie" | `df -h`; zmniejsz „Na Pi trzymaj ostatnie” w Ustawieniach kopii albo przenieś kopie na NAS |
 | „certyfikat HTTPS" | `wgctl tls --renew`; jeśli błąd — `journalctl -u wg-panel-helper -n 40` |
 | karta SD padła | ścieżka C z początku instrukcji |
 
 > **VPN nie potrzebuje panelu do działania.** Tunel chodzi w jądrze, reguły są w iptables (wczytuje je sam `wg0.conf`, także po restarcie Pi). Awaria panelu odbiera Ci tylko możliwość zmian — nikt z użytkowników VPN jej nie zauważy. Terminy dostępu pilnuje w tym czasie strażnik, a panel i helper systemd sam podnosi po awarii.
+
+## VPN nie łączy się po odtworzeniu
+
+Objaw: tunel na telefonie włączony, a w panelu przy osobie brak handshake'u. Sprawdzaj po kolei.
+
+1. **Czy pakiety z telefonu docierają do Pi.** Telefon na danych komórkowych (Wi-Fi wyłączone), na Pi:
+
+```bash
+sudo apt install -y tcpdump
+sudo tcpdump -ni eth0 udp port 51820
+```
+
+Włącz tunel, odczekaj 10 s, **Ctrl+C**. Brak linii = problem z routerem (przekierowanie portu WireGuarda na adres Pi) albo `Endpoint` w pliku wskazuje inny adres niż `curl -4 ifconfig.me`. Są linie tylko w jedną stronę (`… > <adres-pi>.51820`) = Pi nie rozpoznaje pliku — punkt 2.
+
+2. **Czy plik na telefonie pasuje do Pi.** W aplikacji WireGuard stuknij tunel:
+   - sekcja **Peer → Klucz publiczny** = `sudo wg show wg0 public-key`,
+   - sekcja **Interfejs → Klucz publiczny** = klucz przy adresie tej osoby w `sudo wg show wg0 allowed-ips`.
+
+   Coś się różni → usuń tunel z aplikacji i zaimportuj nowy z karty osoby. Jeśli klucz serwera się zmienił (kopia bez klucza), każda osoba potrzebuje nowego pliku — Krok C5.
+
+3. **Zapora.** Na chwilę `sudo ufw disable`, test, potem koniecznie `sudo ufw enable`. Jeśli bez ufw działa — brakuje reguły `51820/udp ALLOW` (Krok B4).
 
 ## Konfiguracja zmieniona poza panelem
 
@@ -1111,11 +1204,13 @@ Jeśli to nie Ty:
 2. Zmień hasła do Pi i NAS, sprawdź `~/.ssh/authorized_keys`.
 3. Dopiero wtedy: **Integralność → Przywróć stan z panelu**.
 
+> **Docker na Pi.** Docker przy każdym swoim starcie wstawia reguły (`DOCKER-USER`, `DOCKER-FORWARD`) na samą górę `FORWARD`. Dlatego panel wpina się także do łańcucha `DOCKER-USER` — Docker zawsze sprawdza go jako pierwszy i nigdy go nie czyści. Ruch z VPN trafia więc do reguł panelu przed regułami Dockera, a restart Pi ani Dockera nie wywołuje alarmu „pierwsza reguła FORWARD to nie skok do WG-USERS”. Starsze wersje panelu tego nie robiły i po restarcie Pi zgłaszały ten alarm — po aktualizacji wystarczy raz kliknąć **Zastosuj zmiany** (albo **Przywróć stan z panelu**).
+
 > ⚠ Jeśli ktoś miał roota na Pi, mógł zmienić także sam panel. Po takim incydencie jedyna pewna droga to czysta karta SD i odtworzenie z kopii — niżej.
 
 ## Karta SD padła albo nowe Pi
 
-To jest **ścieżka C** z początku instrukcji: czysta karta, klucz serwera z menedżera haseł, odtworzenie panelu wprost z NAS. Wszystkie osoby łączą się bez zmian.
+To jest **ścieżka C** z początku instrukcji: czysta karta i `sudo ./install.sh --restore` — instalator odtwarza z pełnej kopii na NAS-ie wszystko, łącznie z kluczem serwera. Wszystkie osoby łączą się bez zmian.
 
 ## Odinstalowanie
 
@@ -1124,7 +1219,7 @@ To jest **ścieżka C** z początku instrukcji: czysta karta, klucz serwera z me
 | Polecenie | Co usuwa | VPN |
 |---|---|---|
 | `sudo /opt/wg-panel/uninstall.sh` | program, usługi (także strażnika), `wgctl`, reguły ufw panelu, urząd certyfikacji panelu | działa dalej z ostatnią konfiguracją; **dane panelu zostają** — ponowna instalacja przywróci panel |
-| `sudo /opt/wg-panel/uninstall.sh --purge` | jak wyżej + baza, kopie na karcie, certyfikaty, kopie plików w `/etc/wireguard`, konto `wg-panel` | działa dalej; od teraz zmieniasz `wg0.conf` ręcznie |
+| `sudo /opt/wg-panel/uninstall.sh --purge` | jak wyżej + baza, kopie na karcie, certyfikaty, kopie plików w `/etc/wireguard`, konto `wg-panel`, zapamiętane opcje instalacji (`/etc/wg-panel`) | działa dalej; od teraz zmieniasz `wg0.conf` ręcznie |
 | `sudo /opt/wg-panel/uninstall.sh --restore` | jak `--purge` + wraca `wg0.conf` z Kroku 2 (`/root/wg-panel-before`) | po `sudo reboot` działa konfiguracja sprzed panelu |
 
 To samo z rozpakowanej paczki: `sudo INSTALL_LANG=pl ./install.sh --uninstall` (z `--purge` albo `--restore`).
@@ -1193,6 +1288,7 @@ Menedżer haseł powinien stać **poza Pi i poza NAS-em** (osobna maszyna albo u
 | cofnij ostatnie zastosowanie | `wgctl rollback` |
 | lista kopii / odtwórz | `wgctl restore` / `wgctl restore 12` |
 | kopie na NAS (nowy system) | `wgctl restore --nas` |
+| całe Pi z pełnej kopii (czysta karta) | `sudo INSTALL_LANG=pl ./install.sh --restore` |
 | kopia teraz / sprawdź kopie | `wgctl backup` / `wgctl backup --verify` |
 | katalog urządzeń | `wgctl host list`, `wgctl host add drukarka 192.168.1.70` |
 | ruch | `wgctl traffic Marek` |
@@ -1223,12 +1319,30 @@ Pełna struktura katalogów, opis każdego pliku i działania całości — [ARC
 ```bash
 cd ~/wg-panel
 git pull
-sudo INSTALL_LANG=pl ./install.sh
+sudo ./install.sh
 ```
 
-Instalator jest bezpieczny do ponownego uruchomienia: podmienia program i usługi, a **dane (baza, klucze, kopie) zostają**. Na czas aktualizacji wstrzymuje strażnika. Jeśli instalowałeś z opcjami (`LAN_ACCESS`, `BIND_HOST`, `INSTALL_LANG`), podaj je ponownie.
+Na początku instalator wypisze, z jakimi opcjami działa, np.:
 
-Katalog `~/wg-panel` (sklonowane repozytorium) nie jest potrzebny do działania panelu — instalator skopiował z niego wszystko do `/opt/wg-panel`. Możesz go usunąć i sklonować ponownie przy następnej aktualizacji.
+```
+Opcje z poprzedniej instalacji (/etc/wg-panel/install.conf): dostęp z LAN: 192.168.1.0/24, port 8080, HTTPS: 1
+```
+
+Instalator pamięta opcje (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) w `/etc/wg-panel/install.conf` — nie podajesz ich drugi raz. Przy pierwszej aktualizacji z wersji, która tego pliku nie miała, zamiast ścieżki pliku zobaczysz `/etc/systemd/system/wg-panel.service`: instalator odczytuje wtedy opcje z obecnej usługi i reguły ufw, a po udanej instalacji zapisuje je do `install.conf`. Jeśli zobaczysz tam `dostęp z LAN: nie`, a panel ma być dostępny z sieci domowej, uruchom instalator jeszcze raz z `sudo LAN_ACCESS=192.168.1.0/24 ./install.sh` (Twoja sieć) — ta wartość też zostanie zapamiętana.
+
+Co zostaje:
+
+- osoby, tiery, reguły, hosty, ustawienia, kopie, konto i historia — baza jest osobno od programu;
+- klucz serwera, certyfikat HTTPS i pliki osób — nikt nie potrzebuje nowego pliku;
+- tiery, które sam usunąłeś albo przemianowałeś — aktualizacja ich nie przywraca (wbudowane tiery i host `nas` powstają tylko przy pierwszej instalacji).
+
+Przed uruchomieniem nowej wersji instalator zapisuje kopię bazy. W **Kopiach** ma plakietkę „sprzed aktualizacji” — gdyby nowa wersja coś namieszała, zaznacz ją i **Odtwórz zaznaczoną…**. VPN działa przez cały czas; instalator uruchamia ponownie panel i helpera — odśwież stronę w przeglądarce.
+
+Nowa wersja czasem zmienia sposób zapisu `wg0.conf`. Wtedy na liście peerów pojawi się karta „Panel ma zmiany, których nie ma na interfejsie” — kliknij **Zastosuj zmiany** i potwierdź.
+
+Żeby zmienić opcję (np. port), podaj ją przy aktualizacji: `sudo BIND_PORT=8443 ./install.sh`. Pusta wartość wyłącza: `sudo LAN_ACCESS= ./install.sh` — panel zostanie dostępny tylko przez VPN.
+
+Katalog `~/wg-panel` (sklonowane repozytorium) nie jest potrzebny do działania panelu — instalator skopiował z niego wszystko do `/opt/wg-panel`. Możesz go zostawić na następną aktualizację (`git pull`) albo usunąć.
 
 ## Co musi zostać
 
