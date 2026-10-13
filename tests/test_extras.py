@@ -350,8 +350,11 @@ check("stare probki sa kasowane",
       conn_t.execute("SELECT COUNT(*) c FROM traffic WHERE ts = 1000").fetchone()["c"] == 0)
 
 from panel import ui  # noqa: E402
-svg = ui.traffic_chart(series)
-check("wykres to poprawny SVG z opisem godzin", "<svg" in svg and "<title>" in svg)
+chart = ui.traffic_chart(series, "Ruch")
+check("wykres to SVG z opisem godzin w dymku", "<svg" in chart and 'data-when="' in chart)
+svg_part = chart[chart.index("<svg"):chart.index("</svg>")]
+check("w SVG nie ma tekstu - napisy nie rozciagaja sie z karta", "<text" not in svg_part)
+check("siedem kolumn dni pod wykresem", chart.count('class="day') == 7)
 
 # ==========================================================================
 print("\n8. Sumy kontrolne kopii - lokalnie")

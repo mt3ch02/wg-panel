@@ -6,6 +6,7 @@ import html
 import json
 import os
 import re
+import math
 import threading
 import time
 import urllib.parse
@@ -301,10 +302,46 @@ document.addEventListener("DOMContentLoaded", function () {
   wgBackupPick();
 });
 
-// --- telefon: wykres ruchu przewijany w bok - startuje od najnowszych godzin ---
+// --- wykres ruchu: na telefonie przewijany w bok od najnowszych godzin; dymek godziny ---
 document.addEventListener("DOMContentLoaded", function () {
+  var toNewest = function () {
+    document.querySelectorAll(".chart-scroll").forEach(function (box) {
+      box.scrollLeft = box.scrollWidth;
+    });
+  };
   document.querySelectorAll(".chart-scroll").forEach(function (box) {
-    box.scrollLeft = box.scrollWidth;
+    var edge = function () { box.classList.toggle("scrolled", box.scrollLeft > 2); };
+    box.addEventListener("scroll", edge, { passive: true });
+    window.addEventListener("load", edge);
+  });
+  toNewest();
+  window.addEventListener("load", toNewest);    // CSS moze dojsc po DOMContentLoaded
+  document.querySelectorAll(".chart-plot").forEach(function (plot) {
+    var tip = plot.querySelector(".chart-tip");
+    var show = function (ev) {
+      var hit = ev.target.closest ? ev.target.closest("rect.hit") : null;
+      if (!hit) { tip.hidden = true; return; }
+      tip.innerHTML = "";
+      var head = document.createElement("b");
+      head.textContent = hit.dataset.when;
+      var down = document.createElement("span");
+      down.className = "down";
+      down.textContent = "↓ " + hit.dataset.down;
+      var up = document.createElement("span");
+      up.className = "up";
+      up.textContent = "↑ " + hit.dataset.up;
+      tip.append(head, down, up);
+      tip.hidden = false;
+      var box = plot.getBoundingClientRect();
+      var x = ev.clientX - box.left + 12;
+      if (x + tip.offsetWidth > box.width) x = ev.clientX - box.left - tip.offsetWidth - 12;
+      tip.style.left = Math.max(0, x) + "px";
+    };
+    plot.addEventListener("pointermove", show);
+    plot.addEventListener("pointerdown", show);          // telefon: dotkniecie slupka
+    plot.addEventListener("pointerleave", function (ev) {
+      if (ev.pointerType === "mouse") tip.hidden = true;
+    });
   });
 });
 
@@ -1143,8 +1180,7 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
     if chart and any(p["rx"] or p["tx"] for p in chart):
         chart_box = f"""
         <div class="card">
-          <h2>{_("Ruch w tunelu - ostatnie 7 dni")}</h2>
-          {traffic_chart(chart)}
+          {traffic_chart(chart, _("Ruch w tunelu - ostatnie 7 dni"))}
         </div>"""
 
     heads = "".join(f"<th>{h}</th>" for h in (
@@ -1358,8 +1394,9 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
     warning_badge = '<span class="badge warn">' + e(warning) + '</span>' if warning else ""
     ip6 = ('<div><span class="muted">' + _("adres IPv6") + '</span><strong>' + e(peer['ip6']) +
            '</strong></div>' if peer['ip6'] and cfg.get('ipv6_enabled') == '1' else "")
-    chart_html = (traffic_chart(chart) if chart and any(p["rx"] or p["tx"] for p in chart)
-                  else '<p class="muted">' + _("Brak danych. Próbki zbierane są co kilka minut, "
+    chart_html = (traffic_chart(chart, _("Ruch - ostatnie 7 dni"))
+                  if chart and any(p["rx"] or p["tx"] for p in chart)
+                  else '<h2>' + _("Ruch - ostatnie 7 dni") + '</h2><p class="muted">' + _("Brak danych. Próbki zbierane są co kilka minut, "
                                                  "wykres pojawi się po pierwszej godzinie ruchu.") + '</p>')
     route_source = (_("ustawione u tej osoby") if route["own"]
                     else _("z tieru {tier}", tier=e(peer["tier_name"] or "")))
@@ -1451,7 +1488,6 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
       </div>
 
       <div class="card">
-        <h2>{_("Ruch - ostatnie 7 dni")}</h2>
         {chart_html}
       </div>
 
@@ -2575,58 +2611,143 @@ def _weekday(stamp: float) -> str:
     return names[time.localtime(stamp).tm_wday]
 
 
-def traffic_chart(series: list[dict], width: int = 940, height: int = 190) -> str:
-    """Wykres slupkowy godzin: pobieranie przez klienta nad osia, wysylka pod nia."""
+UNITS = ("B", "KB", "MB", "GB", "TB")
+
+
+def _nice_ceiling(value: float) -> float:
+    """Okragla gora osi w jednostkach panelu (1024): 1, 1.5, 2, 3, 4, 5, 6, 8 x 10^n.
+    Szczyt zajmuje wiekszosc wysokosci, a podpis osi to np. '800 MB', nie '762.9 MB'."""
+    if value <= 0:
+        return 1.0
+    base = 1
+    while value / base >= 1000 and base < 1024 ** 4:
+        base *= 1024
+    scaled = value / base
+    power = 10 ** math.floor(math.log10(scaled))
+    for step in (1, 1.5, 2, 3, 4, 5, 6, 8, 10):
+        if step * power >= scaled - 1e-9:
+            return step * power * base
+    return 10 * power * base
+
+
+def _short(value: float) -> str:
+    """Krotka wartosc do podpisow wykresu: '3.4 GB', '231 MB' - bez zbednego miejsca po przecinku."""
+    step = float(value)
+    for unit in UNITS:
+        if step < 1000 or unit == UNITS[-1]:
+            if unit == "B":
+                return f"{step:.0f} B"
+            return f"{step:.1f} {unit}" if step < 10 else f"{step:.0f} {unit}"
+        step /= 1024
+    return f"{step:.0f} TB"
+
+
+def _value_unit(value: float) -> str:
+    """'3.3 GB' -> liczba wyrazna, jednostka mniejsza i szara."""
+    number, _sep, unit = _short(value).partition(" ")
+    return f'{e(number)}<span class="unit">{e(unit)}</span>'
+
+
+def traffic_chart(series: list[dict], title: str) -> str:
+    """Wykres ruchu: dni jako kolumny, godzinowe slupki, sumy dzienne pod spodem.
+
+    W SVG sa tylko slupki i linie - moga sie rozciagac z karta. Caly tekst (os, dni, sumy)
+    jest w HTML, wiec ma stala wielkosc niezaleznie od szerokosci karty.
+    """
     if not series:
         return ""
-    pad_l, pad_r, pad_t, pad_b = 54, 8, 10, 22
-    inner_w = width - pad_l - pad_r
-    inner_h = height - pad_t - pad_b
-    mid = pad_t + inner_h * 0.62  # pobieranie zwykle wieksze - dostaje wiecej miejsca
-    peak = max(max(p["tx"] for p in series), max(p["rx"] for p in series), 1)
-    bar_w = inner_w / len(series)
+    width, height, mid = 1000, 150, 110      # jednostki rysunku; mid = os zera
+    # 7 pelnych dob od polnocy: 6 poprzednich + dzisiejsza. Rowne kolumny, dzisiejsze
+    # przyszle godziny zostaja puste - podpisy dni nigdy nie nachodza na siebie.
+    by_hour = {p["ts"] - p["ts"] % 3600: p for p in series}
+    last = time.localtime(series[-1]["ts"])
+    slots, days = [], []
+    for back in range(6, -1, -1):
+        midnight = time.mktime((last.tm_year, last.tm_mon, last.tm_mday - back, 0, 0, 0, 0, 0, -1))
+        hours = [int(midnight) + h * 3600 for h in range(24)]
+        chunk = [by_hour.get(ts, {"ts": ts, "rx": 0, "tx": 0, "future": ts > series[-1]["ts"]})
+                 for ts in hours]
+        slots.extend(chunk)
+        days.append((back == 0, f'{_weekday(midnight)} {time.localtime(midnight).tm_mday:02d}',
+                     sum(p["tx"] for p in chunk), sum(p["rx"] for p in chunk)))
+    count = len(slots)
+    slot = width / count
+    peak_down = _nice_ceiling(max(p["tx"] for p in slots))
+    peak_up = _nice_ceiling(max(p["rx"] for p in slots))
 
-    bars = []
-    for index, point in enumerate(series):
-        x = pad_l + index * bar_w
-        down = (point["tx"] / peak) * (mid - pad_t)
-        up = (point["rx"] / peak) * (pad_t + inner_h - mid)
-        stamp = _weekday(point["ts"]) + time.strftime(" %H:00", time.localtime(point["ts"]))
-        title = _("{when} - pobrane {down}, wysłane {up}", when=stamp, down=_human(point["tx"]),
-                  up=_human(point["rx"]))
-        if down > 0.3:
-            bars.append(f'<rect x="{x:.1f}" y="{mid - down:.1f}" width="{max(bar_w - 0.6, 0.6):.1f}" '
-                        f'height="{down:.1f}" class="bar-down"><title>{e(title)}</title></rect>')
-        if up > 0.3:
-            bars.append(f'<rect x="{x:.1f}" y="{mid:.1f}" width="{max(bar_w - 0.6, 0.6):.1f}" '
-                        f'height="{up:.1f}" class="bar-up"><title>{e(title)}</title></rect>')
+    shapes = ['<defs><pattern id="chart-future" width="8" height="8" patternUnits="userSpaceOnUse" '
+              'patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="8" class="future-line"/>'
+              '</pattern></defs>']
+    day_w = width / 7
+    now_x = len([p for p in slots if not p.get("future")]) * slot
+    for n in range(7):
+        x0 = n * day_w
+        # tlo ma tylko dzisiaj - dni rozdzielaja cienkie linie; naprzemienne pasy zlewaly
+        # sie z podswietleniem dzisiaj i wygladaly jak druga poswiata na poczatku wykresu
+        if n == 6:
+            shapes.append(f'<rect x="{x0:.2f}" y="0" width="{now_x - x0:.2f}" height="{height}" class="band-today"/>')
+            shapes.append(f'<rect x="{now_x:.2f}" y="0" width="{width - now_x:.2f}" height="{height}" '
+                          f'fill="url(#chart-future)"/>')
+            shapes.append(f'<rect x="{x0:.2f}" y="0" width="{day_w:.2f}" height="3" class="today-mark"/>')
+        if n:
+            shapes.append(f'<line x1="{x0:.2f}" x2="{x0:.2f}" y1="0" y2="{height}" class="sep"/>')
+    shapes.append(f'<line x1="{now_x:.2f}" x2="{now_x:.2f}" y1="0" y2="{height}" class="now"/>')
 
-    labels = []
-    for index, point in enumerate(series):
-        if time.localtime(point["ts"]).tm_hour == 0:
-            x = pad_l + index * bar_w
-            labels.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{pad_t}" '
-                          f'y2="{pad_t + inner_h}" class="grid"/>')
-            labels.append(f'<text x="{x + 3:.1f}" y="{height - 6}" class="axis">'
-                          f'{_weekday(point["ts"])} {time.strftime("%d", time.localtime(point["ts"]))}</text>')
+    for frac in (0.5, 1.0):
+        y = mid - frac * (mid - 4)
+        shapes.append(f'<line x1="0" x2="{width}" y1="{y:.1f}" y2="{y:.1f}" class="grid"/>')
+    shapes.append(f'<line x1="0" x2="{width}" y1="{mid}" y2="{mid}" class="axis-line"/>')
 
-    total_down = sum(p["tx"] for p in series)
-    total_up = sum(p["rx"] for p in series)
+    hits = []
+    for index, point in enumerate(slots):
+        if point.get("future"):
+            continue
+        x = index * slot
+        bar_x, bar_w = x + slot * 0.12, slot * 0.76
+        if point["tx"]:
+            h = max(1.0, point["tx"] / peak_down * (mid - 4))
+            shapes.append(f'<rect x="{bar_x:.2f}" y="{mid - h:.2f}" width="{bar_w:.2f}" '
+                          f'height="{h:.2f}" class="bar-down"/>')
+        if point["rx"]:
+            h = max(1.0, point["rx"] / peak_up * (height - mid - 4))
+            shapes.append(f'<rect x="{bar_x:.2f}" y="{mid + 1}" width="{bar_w:.2f}" '
+                          f'height="{h:.2f}" class="bar-up"/>')
+        when = _weekday(point["ts"]) + time.strftime(" %d.%m, %H:00", time.localtime(point["ts"]))
+        hits.append(f'<rect x="{x:.2f}" y="0" width="{slot:.2f}" height="{height}" class="hit" '
+                    f'data-when="{e(when)}" data-down="{e(_human(point["tx"]))}" '
+                    f'data-up="{e(_human(point["rx"]))}"/>')
+
+    def axis_label(value: float, y: float) -> str:
+        return f'<span style="top:{y / height * 100:.2f}%">{e(_short(value)) if value else "0"}</span>'
+
+    axis = (axis_label(peak_down, 4) + axis_label(peak_down / 2, mid - (mid - 4) / 2)
+            + axis_label(0, mid))
+    day_cells = "".join(
+        f'<div class="day{" today" if today else ""}"><b>{e(label)}</b>'
+        f'<span class="v down">↓ {_value_unit(down)}</span>'
+        f'<span class="v up">↑ {_value_unit(up)}</span></div>'
+        for today, label, down, up in days)
+    total_down = sum(day[2] for day in days)
+    total_up = sum(day[3] for day in days)
     return f"""
       <div class="chart">
-        <div class="chart-scroll">
-        <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img"
-             aria-label="{e(_("Ruch godzinowy z ostatnich 7 dni"))}">
-          <line x1="{pad_l}" x2="{width - pad_r}" y1="{mid:.1f}" y2="{mid:.1f}" class="axis-line"/>
-          {''.join(labels)}
-          {''.join(bars)}
-          <text x="{pad_l - 6}" y="{pad_t + 10}" class="axis" text-anchor="end">{e(_human(peak))}</text>
-          <text x="{pad_l - 6}" y="{mid + 4:.1f}" class="axis" text-anchor="end">0</text>
-        </svg>
+        <div class="chart-head">
+          <h2>{title}</h2>
+          <div class="chart-totals">
+            <div class="total"><small><i class="sw sw-down"></i>{_("pobrane")}</small><strong>{e(_human(total_down))}</strong></div>
+            <div class="total"><small><i class="sw sw-up"></i>{_("wysłane")}</small><strong>{e(_human(total_up))}</strong></div>
+          </div>
         </div>
-        <div class="legend">
-          <span><i class="sw sw-down"></i>{_("pobrane przez klienta")}: <strong>{e(_human(total_down))}</strong></span>
-          <span><i class="sw sw-up"></i>{_("wysłane przez klienta")}: <strong>{e(_human(total_up))}</strong></span>
+        <div class="chart-scroll">
+          <div class="chart-body">
+            <div class="chart-axis" aria-hidden="true">{axis}</div>
+            <div class="chart-plot">
+              <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img"
+                   aria-label="{e(_("Ruch godzinowy z ostatnich 7 dni"))}">{''.join(shapes)}{''.join(hits)}</svg>
+              <div class="chart-tip" hidden></div>
+            </div>
+            <div class="chart-days">{day_cells}</div>
+          </div>
         </div>
       </div>"""
 

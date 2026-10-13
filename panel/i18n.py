@@ -629,10 +629,10 @@ EN.update({
         'Sun',
     'Ruch godzinowy z ostatnich 7 dni':
         'Hourly traffic for the last 7 days',
-    'pobrane przez klienta':
-        'downloaded by the client',
-    'wysłane przez klienta':
-        'uploaded by the client',
+    'pobrane':
+        'downloaded',
+    'wysłane':
+        'uploaded',
     'Nowy peer':
         'New peer',
     'Urządzenie':
@@ -1527,8 +1527,6 @@ EN.update({
 
 # --- wykres - podpowiedz ---
 EN.update({
-    '{when} - pobrane {down}, wysłane {up}':
-        '{when} - downloaded {down}, uploaded {up}',
 })
 
 # --- symulator i kopie - drobne ---

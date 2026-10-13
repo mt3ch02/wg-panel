@@ -44,7 +44,7 @@ i reguły iptables, pokazuje różnicę przed zastosowaniem i sam cofa zmianę, 
 | **Integralność** | Wykrywa ręczną edycję `wg0.conf`, reguły dopisane do łańcuchów panelu, klucze dodane przez `wg set` i reguły wstawione przed łańcuch panelu. |
 | **Kopie zapasowe** | Codziennie: na NAS (udział SMB), na Pi albo do pobrania na komputer. Pełna kopia jest zaszyfrowana i zawiera klucz serwera, więc jednym poleceniem odtworzysz z niej całe Pi. |
 | **HTTPS** | Własny urząd certyfikacji panelu, ograniczony (X.509 Name Constraints) do sieci domowej, VPN i nazwy Pi. Działa też własny certyfikat, np. z Let's Encrypt. |
-| **Historia ruchu** | Wykres godzinowy z 7 dni, łączny i dla każdej osoby, z wykrywaniem anomalii. |
+| **Historia ruchu** | Wykres godzinowy z 7 dni — każdy dzień w osobnej kolumnie z sumą, dzisiejszy wyróżniony — łączny i dla każdej osoby, z wykrywaniem anomalii. |
 | **IPv6** | Opcjonalnie. Reguły działają w obu rodzinach adresów. |
 | **Linki jednorazowe, kasowanie klucza** | Przekazujesz konfigurację bez wysyłania pliku, potem kasujesz klucz prywatny z serwera. |
 | **`wgctl`** | Wszystko, co panel, z terminala. Ta sama baza, ten sam helper. |

@@ -176,7 +176,13 @@ szereg godzinowy; spadek licznika oznacza restart interfejsu i jest obsługiwany
 8 dni są kasowane.
 
 Wykres: suma na liście peerów, osobny na stronie każdego peera. Nad osią pobieranie przez klienta,
-pod osią wysyłka.
+pod osią wysyłka (własna skala, żeby mała wysyłka była widoczna). Siedem równych kolumn, każda od
+północy do północy: sześć poprzednich dni i dzisiejszy, wyróżniony; godziny, które jeszcze nie minęły,
+są zakreskowane, a przerywana linia to „teraz”. Pod kolumnami sumy dni (↓ pobrane, ↑ wysłane),
+w nagłówku sumy z całego wykresu. Góra osi to okrągła wartość tuż nad najwyższym słupkiem.
+
+W SVG są tylko słupki i linie — rozciągają się z kartą. Cały tekst (oś, dni, sumy, dymek godziny)
+jest w HTML, więc ma stałą wielkość niezależnie od szerokości karty (`ui.traffic_chart`).
 
 **Anomalia**: ostatnia pełna godzina większa niż N-krotność mediany godzin z tygodnia (domyślnie
 10×) i jednocześnie powyżej progu (domyślnie 500 MB). Mediana liczona jest tylko z godzin, w których
@@ -422,7 +428,7 @@ Panel działa w przeglądarce telefonu i tabletu bez przewijania strony w bok (s
 w szerokościach 320, 390, 768 i 1280 px). Do 1080 px nawigacja chowa się pod przyciskiem „Menu”
 (z licznikiem alertów); poniżej 720 px lista peerów zamienia się w karty, a pozostałe tabele
 w listy „podpis: wartość” — podpisy biorą się z nagłówków kolumn. Wykres ruchu na telefonie
-przewija się w bok we własnej ramce (otwiera się na najnowszych godzinach), strona nie. Na ekranach
+przewija się w bok we własnej ramce (otwiera się na najnowszych dniach, wartości osi stoją w miejscu), strona nie. Na ekranach
 dotykowych (także telefon w poziomie i tablet) pola formularzy mają 16 px, więc iPhone nie przybliża
 strony przy logowaniu, a przyciski są pod palec. Na komputerze z myszką wygląd się nie zmienia.
 

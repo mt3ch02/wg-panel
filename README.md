@@ -45,7 +45,7 @@ undoes the change automatically if it cut you off.
 | **Integrity check** | Detects hand edits to `wg0.conf`, rules added to the panel's chains, keys added with `wg set`, and rules inserted in front of the panel's chain. |
 | **Backups** | Daily, to a NAS (SMB share), to the Pi, or downloaded to your computer. A full backup is encrypted and contains the server key, so you can rebuild the whole Pi from it with one command. |
 | **HTTPS** | The panel's own certificate authority, limited by X.509 name constraints to your home network, the VPN and the Pi's name. Your own certificate (for example Let's Encrypt) also works. |
-| **Traffic history** | Hourly chart for 7 days, total and per peer, with anomaly detection. |
+| **Traffic history** | Hourly chart for 7 days — one column per day with daily totals, today highlighted — total and per peer, with anomaly detection. |
 | **IPv6** | Optional. Rules apply to both address families. |
 | **One-time links, key deletion** | Hand over a configuration without sending the file around, then delete the private key from the server. |
 | **`wgctl`** | Everything the panel does, from the terminal. Same database, same helper. |

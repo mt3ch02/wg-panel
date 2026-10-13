@@ -118,6 +118,10 @@ After enabling IPv6, peers need **new configuration files** — the old ones hav
 
 The scheduler saves counters from `wg show dump` every 5 minutes. Hourly series are computed from the differences between consecutive samples; a counter drop means an interface restart and is handled. Samples older than 8 days are deleted.
 
+The chart: a total on the peer list, a separate one on each peer's page. Above the axis — what the client downloaded, below it — what it uploaded (on its own scale, so small uploads stay visible). Seven equal columns, each from midnight to midnight: the six previous days and today, highlighted; hours that haven't happened yet are hatched and a dashed line marks "now". Daily totals (↓ downloaded, ↑ uploaded) sit under the columns, the totals for the whole chart in its header. The top of the axis is a round value just above the tallest bar.
+
+The SVG holds only bars and lines — they stretch with the card. All text (axis, days, totals, the hour tooltip) is HTML, so it keeps its size whatever the card's width (`ui.traffic_chart`).
+
 **Anomaly:** the last full hour is larger than N times the median of the week's hours (default 10×) and above a threshold (default 500 MB). The median is computed only from hours with any traffic, and only after 12 such hours — so a new peer doesn't alarm right away.
 
 ## Integrity
@@ -270,7 +274,7 @@ Polish text is the translation key (`panel/i18n.py`, the `EN` dictionary), so re
 
 ## Phone
 
-The panel works in a phone and tablet browser without sideways scrolling (checked at 320, 390, 768 and 1280 px). Up to 1080 px the navigation hides behind a "Menu" button (with an alert counter); below 720 px the peer list turns into cards and other tables into "label: value" lists. On a phone the traffic chart scrolls sideways inside its own frame (opening on the latest hours), the page doesn't. On touch screens form fields are 16 px, so an iPhone doesn't zoom in at login, and buttons are finger-sized. On a desktop with a mouse nothing changes.
+The panel works in a phone and tablet browser without sideways scrolling (checked at 320, 390, 768 and 1280 px). Up to 1080 px the navigation hides behind a "Menu" button (with an alert counter); below 720 px the peer list turns into cards and other tables into "label: value" lists. On a phone the traffic chart scrolls sideways inside its own frame (opening on the latest days, with the axis values staying in place), the page doesn't. On touch screens form fields are 16 px, so an iPhone doesn't zoom in at login, and buttons are finger-sized. On a desktop with a mouse nothing changes.
 
 ## Speed
 
