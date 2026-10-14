@@ -377,10 +377,12 @@ document.addEventListener("DOMContentLoaded", function () {
       head.textContent = hit.dataset.when;
       var down = document.createElement("span");
       down.className = "down";
-      down.textContent = "↓ " + hit.dataset.down;
+      down.innerHTML = plot.dataset.arDown;
+      down.append(" " + hit.dataset.down);
       var up = document.createElement("span");
       up.className = "up";
-      up.textContent = "↑ " + hit.dataset.up;
+      up.innerHTML = plot.dataset.arUp;
+      up.append(" " + hit.dataset.up);
       tip.append(head, down, up);
       tip.hidden = false;
       var box = plot.getBoundingClientRect();
@@ -737,10 +739,11 @@ function wgHandshakeText(seconds, now) {{
   if (d < 172800) return [WG_T.d1_ago, state];
   return [WG_T.d_ago.replace("{{n}}", Math.floor(d / 86400)), state];
 }}
+var WG_AR = {json.dumps(ARROWS)};
 function wgTransfer(down, up) {{
   var part = function (css, arrow, value) {{
     var t = wgBytes(value).split(" ");
-    return '<span class="tr ' + css + '"><i>' + arrow + '</i>' + t[0] + '<span class="unit">' + t[1] + '</span></span>';
+    return '<span class="tr ' + css + '"><i>' + WG_AR[css] + '</i>' + t[0] + '<span class="unit">' + t[1] + '</span></span>';
   }};
   return part("down", "↓", down) + part("up", "↑", up);
 }}
@@ -1096,11 +1099,18 @@ def _since_title(known: dict) -> str:
         "%Y-%m-%d", time.localtime(known["since"])))) + '"'
 
 
+# strzalki ruchu jako male ikony SVG - znaki tekstu (↓ ↑) Windows rysuje cienka kreska
+ARROWS = {
+    "down": '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5V10M2.4 6.6 6 10.2l3.6-3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    "up": '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 10.5V2M2.4 5.4 6 1.8l3.6 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+}
+
+
 def _transfer(known: dict) -> str:
     """Ruch osoby tak jak na wykresie: najpierw pobrane (tx serwera), potem wyslane (rx)."""
     def part(css, arrow, value):
         number, _sep, unit = _human(value).partition(" ")
-        return (f'<span class="tr {css}"><i>{arrow}</i>{e(number)}'
+        return (f'<span class="tr {css}"><i>{ARROWS[css]}</i>{e(number)}'
                 f'<span class="unit">{e(unit)}</span></span>')
     return part("down", "↓", known["tx"]) + part("up", "↑", known["rx"])
 
@@ -2803,11 +2813,19 @@ def traffic_chart(series: list[dict], title: str) -> str:
                     f'data-when="{e(when)}" data-down="{e(_human(point["tx"]))}" '
                     f'data-up="{e(_human(point["rx"]))}"/>')
 
+    # opisy osi w jednej jednostce - jednostka szczytu ("1.0 GB" i "0.5 GB", nie "512 MB")
+    power = 0
+    while peak_down >= 1024 ** (power + 1) and power < len(UNITS) - 1:
+        power += 1
+
     def axis_label(value: float, y: float) -> str:
-        return f'<span style="top:{y / height * 100:.2f}%">{e(_short(value)) if value else "0"}</span>'
+        scaled = value / 1024 ** power
+        text = (f"{scaled:.2f}".rstrip("0").rstrip(".") + " " + UNITS[power]) if value else "0"
+        return f'<span style="top:{y / height * 100:.2f}%">{e(text)}</span>'
 
     axis = (axis_label(peak_down, 4) + axis_label(peak_down / 2, mid - (mid - 4) / 2)
             + axis_label(0, mid))
+
     def day_cell(today: bool, label: str, down: float, up: float, nodata: bool) -> str:
         css = "day" + (" today" if today else "")
         if nodata:      # panel jeszcze wtedy nie zbieral probek
@@ -2815,9 +2833,14 @@ def traffic_chart(series: list[dict], title: str) -> str:
                     f'<b>{e(label)}</b><span class="none">{e(_("brak danych"))}</span></div>')
         if not down and not up:
             return f'<div class="{css} empty"><b>{e(label)}</b><span class="none">{e(_("brak ruchu"))}</span></div>'
-        return (f'<div class="{css}"><b>{e(label)}</b>'
-                f'<span class="v down">↓ {_value_unit(down)}</span>'
-                f'<span class="v up">↑ {_value_unit(up)}</span></div>')
+        # strzalka | liczba (do prawej) | jednostka - w siatce o stalych kolumnach, wiec strzalki
+        # stoja jedna pod druga i na tej samej wysokosci we wszystkich dniach
+        def row(css_row: str, arrow: str, value: float) -> str:
+            number, _sep, unit = _short(value).partition(" ")
+            return (f'<i class="{css_row}">{ARROWS[css_row]}</i><span class="n {css_row}">{e(number)}</span>'
+                    f'<span class="unit">{e(unit)}</span>')
+        return (f'<div class="{css}"><b>{e(label)}</b><span class="vals">'
+                f'{row("down", "↓", down)}{row("up", "↑", up)}</span></div>')
 
     day_cells = "".join(day_cell(*day) for day in days)
     total_down = sum(day[2] for day in days)
@@ -2834,7 +2857,7 @@ def traffic_chart(series: list[dict], title: str) -> str:
         <div class="chart-scroll">
           <div class="chart-body">
             <div class="chart-axis" aria-hidden="true">{axis}</div>
-            <div class="chart-plot">
+            <div class="chart-plot" data-ar-down="{e(ARROWS['down'])}" data-ar-up="{e(ARROWS['up'])}">
               <svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img"
                    aria-label="{e(_("Ruch godzinowy z ostatnich 7 dni"))}">{''.join(shapes)}{''.join(hits)}</svg>
               <div class="chart-tip" hidden></div>
