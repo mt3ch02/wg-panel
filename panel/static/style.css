@@ -1076,3 +1076,43 @@ td.nowrap, .peers-list td.c-hs, .peers-list td.c-transfer, .nowrap { white-space
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px;
          margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
 .pager .button { margin: 0; }
+
+/* kopie: wlasne nazwy urzadzen - naglowek z przyciskiem "Zmien nazwe", potem Zapisz / Anuluj */
+.named { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.named h3 { margin: 0; overflow-wrap: anywhere; }
+.named button { padding: 2px 10px; font-size: 12px; min-height: 0; line-height: 1.5; border-radius: 6px; }
+.named [hidden], .set-info label.rename[hidden] { display: none; }
+.rename-actions { display: inline-flex; gap: 6px; }
+.named button.rename-save { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.named button.rename-save:hover { filter: brightness(1.15); }
+.named button.rename-cancel { background: transparent; border-color: var(--danger); color: var(--danger); }
+.named button.rename-cancel:hover { background: var(--danger-soft); }
+.set-info label.rename { display: flex; flex-direction: column; gap: 5px; margin: 4px 0 10px;
+                         font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+.set-info label.rename small { text-transform: none; letter-spacing: 0; }
+
+/* pola w wierszu ustawien: podpis, pole i podpowiedz to wspolne wiersze siatki (subgrid),
+   wiec pola w jednym rzedzie stoja rowno, nawet gdy jeden podpis zawinie sie do dwoch linii */
+@supports (grid-template-rows: subgrid) {
+  form.row > label.fixed, #zaawansowane > label.fixed {
+    display: grid; grid-template-rows: subgrid; grid-row: span 3; row-gap: 6px; }
+  form.row > label.fixed .lbl, #zaawansowane > label.fixed .lbl { min-height: 0; align-self: end; }
+  form.row > label.fixed small, #zaawansowane > label.fixed small { min-height: 0; }
+}
+
+/* ruch osoby na liscie i na stronie osoby - te same strzalki i kolory co wykres */
+.tr { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tr + .tr { margin-left: 12px; }
+.tr i { font-style: normal; margin-right: 3px; }
+.tr.down i { color: var(--accent); }
+.tr.up i { color: var(--ok); }
+.tr.down { color: var(--ink); }
+.tr .unit { margin-left: 3px; font-size: .85em; color: var(--muted); }
+/* w pasku danych osoby .stats span to male podpisy - liczby ruchu maja zostac duze */
+.stats strong .tr, .stats strong .tr i { font-size: inherit; text-transform: none; letter-spacing: 0; }
+.stats strong .tr .unit { font-size: .8em; text-transform: none; letter-spacing: 0; }
+
+/* dzien bez danych / bez ruchu: jedna szara linia zamiast dwoch zer */
+.chart-days .none { display: block; font-size: 12px; color: var(--muted); font-style: italic; }
+.chart-days .empty b { color: var(--muted); }
+.chart .nodata { fill: var(--line-soft); opacity: .35; }

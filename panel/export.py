@@ -26,6 +26,7 @@ import subprocess
 import time
 
 from . import cryptobox, db, i18n
+from . import names as device_names
 
 FORMAT_VERSION = 1
 SAFE_PATH = re.compile(r"^[A-Za-z0-9._/-]*$")
@@ -504,7 +505,7 @@ def upload_smb(cfg: dict, local_path: str, name: str) -> str:
 
     for value, label in ((host, "adres"), (share, "udzial")):
         if not value:
-            raise ValueError("kopia SMB: brak adresu albo udzialu NAS")
+            raise ValueError(f"kopia SMB ({device_names.storage(cfg)}): brak adresu albo udzialu")
         if not SAFE_NAME.match(value.replace(":", "")):
             raise ValueError(f"kopia SMB: zly {label}")
     if path and (not SAFE_PATH.match(path) or ".." in path.split("/")):
@@ -512,7 +513,7 @@ def upload_smb(cfg: dict, local_path: str, name: str) -> str:
     if not SAFE_NAME.match(name):
         raise ValueError("kopia SMB: zla nazwa pliku")
     if not user or not password:
-        raise ValueError("kopia SMB: brak uzytkownika albo hasla NAS")
+        raise ValueError(f"kopia SMB ({device_names.storage(cfg)}): brak uzytkownika albo hasla")
 
     commands = ["prompt OFF"]
     if path:
@@ -631,8 +632,9 @@ def adopt_smb(conn: sqlite3.Connection, names: list) -> int:
         with conn:
             conn.execute(
                 """INSERT INTO backups(ts, target, path, bytes, encrypted, ok, detail, sha256)
-                   VALUES (?, 'smb', ?, 0, ?, 1, 'znaleziona na NAS', ?)""",
-                (moment, prefix + name, int(name.endswith(".enc")), digest))
+                   VALUES (?, 'smb', ?, 0, ?, 1, ?, ?)""",
+                (moment, prefix + name, int(name.endswith(".enc")),
+                 i18n.pl("znaleziona: {where}", where=device_names.storage(cfg)), digest))
         added += 1
     return added
 
@@ -761,8 +763,9 @@ def adopt_local(conn: sqlite3.Connection) -> int:
         with conn:
             conn.execute(
                 """INSERT INTO backups(ts, target, path, bytes, encrypted, ok, detail, sha256)
-                   VALUES (?, 'local', ?, ?, ?, 1, 'znaleziona na Pi', ?)""",
-                (_stamp(name) or moment, path, size, int(name.endswith(".enc")), digest))
+                   VALUES (?, 'local', ?, ?, ?, 1, ?, ?)""",
+                (_stamp(name) or moment, path, size, int(name.endswith(".enc")),
+                 i18n.pl("znaleziona: {where}", where=device_names.server(cfg)), digest))
         added += 1
     return added
 
@@ -856,16 +859,23 @@ def _smb_dirs(cfg: dict) -> list[str]:
     return sorted(found)
 
 
+def smb_problem(cfg: dict, exc: Exception) -> str:
+    """Blad SMB do pokazania: zawsze zaczyna sie od nazwy miejsca na kopie, dokladnie raz."""
+    text = explain_smb(cfg, exc)
+    name = device_names.storage(cfg)
+    return text if text.startswith(name + ":") else f"{name}: {text}"
+
+
 def explain_smb(cfg: dict, exc: Exception) -> str:
     """Blad smbclient po ludzku: co poprawic, a nie sam kod NT_STATUS."""
     text = str(exc)
     share, path = cfg.get("smb_share", ""), (cfg.get("smb_path") or "").strip("/")
     if "LOGON_FAILURE" in text:
-        return (f"NAS odrzucił login albo hasło (użytkownik {cfg.get('smb_user') or '-'}) - "
-                "sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres Pi "
-                "zablokowany (np. automatyczna blokada adresów)")
+        return (f"{device_names.storage(cfg)}: odrzucony login albo hasło (użytkownik "
+                f"{cfg.get('smb_user') or '-'}) - sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest "
+                f"wyłączone albo adres serwera ({device_names.server(cfg)}) zablokowany (np. automatyczna blokada adresów)")
     if "BAD_NETWORK_NAME" in text:
-        return f"na NAS nie ma udziału {share}"
+        return f"{device_names.storage(cfg)}: nie ma udziału {share}"
     if "OBJECT_NAME_NOT_FOUND" in text or "OBJECT_PATH_NOT_FOUND" in text:
         try:
             dirs = _smb_dirs(cfg)
@@ -875,8 +885,8 @@ def explain_smb(cfg: dict, exc: Exception) -> str:
         return f"na udziale {share} nie ma katalogu {path}{hint}"
     if any(code in text for code in ("IO_TIMEOUT", "HOST_UNREACHABLE", "CONNECTION_REFUSED",
                                      "Connection to", "NETWORK_UNREACHABLE")):
-        return (f"NAS nie odpowiada pod adresem {cfg.get('smb_host')} - sprawdź adres i czy "
-                "na NAS-ie jest włączone SMB")
+        return (f"{device_names.storage(cfg)}: brak odpowiedzi pod adresem {cfg.get('smb_host')} - sprawdź "
+                "adres i czy na NAS-ie jest włączone SMB")
     return text
 
 
@@ -906,9 +916,9 @@ def restore_from(conn: sqlite3.Connection, source: str, passphrase: str,
         except (ValueError, IndexError, UnicodeDecodeError):
             expected = ""
         if expected and sha256(blob) != expected:
-            raise ValueError("suma kontrolna z pliku .sha256 na NAS sie nie zgadza - "
+            raise ValueError(f"suma kontrolna z pliku .sha256 ({device_names.storage(cfg)}) sie nie zgadza - "
                              "nie odtwarzam")
-        label = f"NAS: {value}"
+        label = f"{device_names.storage(cfg)}: {value}"
     elif kind == "file" and value in local_files(cfg):
         path = os.path.join(staging_dir(cfg), value)
         with open(path, "rb") as handle:

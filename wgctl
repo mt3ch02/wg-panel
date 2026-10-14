@@ -37,7 +37,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from panel import (db, export, helperclient, model as panel_model, qr, schedule,  # noqa: E402
+from panel import (db, export, helperclient, model as panel_model, names, qr, schedule,  # noqa: E402
                    render, simulate, stats, traffic, watchdog, wgcrypto)
 
 DB_PATH = os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")
@@ -657,8 +657,9 @@ def cmd_restore(args, conn) -> int:
         print(f"{BOLD}Kopie do odtworzenia{RESET}")
         for row in conn.execute("SELECT * FROM backups WHERE ok = 1 ORDER BY id DESC LIMIT 20"):
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
-            where = "NAS" if row["target"] == "smb" else "karta SD"
-            print(f'  #{row["id"]:<4} {when}  {where:<9} {os.path.basename(row["path"])}')
+            cfg = db.settings(conn)
+            where = names.storage(cfg) if row["target"] == "smb" else names.server(cfg)
+            print(f'  #{row["id"]:<4} {when}  {where:<12} {os.path.basename(row["path"])}')
         for name in export.local_files(db.settings(conn)):
             print(f"  plik  {name}")
         if args.nas:
@@ -666,9 +667,9 @@ def cmd_restore(args, conn) -> int:
                 for name in export.list_smb(db.settings(conn)):
                     print(f"  nas   {name}")
             except Exception as exc:  # noqa: BLE001
-                print(f"{RED}NAS:{RESET} {exc}")
+                print(f"{RED}{names.storage(db.settings(conn))}:{RESET} {exc}")
         print(f"\n{DIM}wgctl restore NUMER  |  wgctl restore NAZWA_PLIKU  |  "
-              f"wgctl restore --nas NAZWA_NA_NAS{RESET}")
+              f"wgctl restore --nas NAZWA_PLIKU_NA_UDZIALE{RESET}")
         return 0
     if args.source.lstrip("#").isdigit():
         source = f"id:{args.source.lstrip('#')}"
@@ -854,7 +855,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="zamiast robic kopie, sprawdz sumy kontrolne ostatnich")
     backup.add_argument("--count", type=int, default=5)
     backup.add_argument("--target", choices=["smb", "local", "both"], default=None,
-                        help="gdzie ta jedna kopia: smb (tylko NAS), local (tylko Pi), "
+                        help="gdzie ta jedna kopia: smb (tylko udzial SMB), local (tylko serwer), "
                              "both (oba); domyslnie jak w ustawieniach")
 
     host = sub.add_parser("host", help="katalog hostow LAN")
@@ -872,7 +873,7 @@ def build_parser() -> argparse.ArgumentParser:
     rest.add_argument("--with-users", action="store_true", help="odtworz tez konta panelu")
     rest.add_argument("--yes", action="store_true")
     rest.add_argument("--nas", action="store_true",
-                      help="lista i odtwarzanie wprost z NAS (nowy system)")
+                      help="lista i odtwarzanie wprost z udzialu SMB (nowy system)")
 
     setp = sub.add_parser("set", help="zmien nazwe, urzadzenie albo tier peera")
     setp.add_argument("name", help="nazwa albo adres IP peera")

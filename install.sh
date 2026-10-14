@@ -456,7 +456,7 @@ Done.
 
 Panel:
 $ACCESS_LINE
-  $SCHEME://$VPN_HOST:$BIND_PORT   - through the VPN, only tiers with port $BIND_PORT in "Ports on the Pi itself" (ADMIN by default)
+  $SCHEME://$VPN_HOST:$BIND_PORT   - through the VPN, only tiers with port $BIND_PORT in "Ports on the server itself" (ADMIN by default)
 $TLS_LINES
 
 $NEXT_LINES
@@ -484,7 +484,7 @@ Gotowe.
 
 Panel:
 $ACCESS_LINE
-  $SCHEME://$VPN_HOST:$BIND_PORT   - przez VPN, tylko tiery z portem $BIND_PORT w „Porty na samym Pi” (domyślnie ADMIN)
+  $SCHEME://$VPN_HOST:$BIND_PORT   - przez VPN, tylko tiery z portem $BIND_PORT w „Porty na samym serwerze” (domyślnie ADMIN)
 $TLS_LINES
 
 $NEXT_LINES

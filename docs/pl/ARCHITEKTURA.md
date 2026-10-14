@@ -116,7 +116,7 @@ w tle. Instalacja z `LAN_ACCESS=192.168.1.0/24` ustawia nasłuch na wszystkich a
 regułę ufw (komentarz `wg-panel LAN`) wpuszczającą na port panelu tylko z tej sieci; bez niej
 reguła ufw wpuszcza wyłącznie z `wg0`.
 
-Z VPN panel otworzą **tylko tiery, które mają port panelu w polu „Porty na samym Pi”**
+Z VPN panel otworzą **tylko tiery, które mają port panelu w polu „Porty na samym serwerze”**
 (`host_access`; domyślnie ADMIN: `22,3389,8080`). Port panelu należy do portów zarządzanych
 łańcucha `WG-USERS-HOST`, więc pozostali dostają DROP mimo bycia w VPN. Starsza wersja miała
 osobny przełącznik przy osobie (`panel_access`); migracja przenosi go na port w tierze tej osoby.
@@ -169,6 +169,10 @@ IPv6 w panelu usuwa ten plik i łańcuchy `ip6tables`.
 
 Po włączeniu IPv6 peerom trzeba wydać **nowe pliki konfiguracyjne** — stare nie mają adresu IPv6.
 
+## Nazwy urządzeń
+
+`panel/names.py`: serwer („Pi”) i miejsce na kopie („NAS”) to ustawienia `name_server` i `name_storage`, a nie tekst wpisany w kod. Panel wczytuje je na początku każdego żądania; teksty stawiają nazwę w formie podstawowej, jak etykietę (`_("... {storage} ...", **names.kw())`), więc pasuje każda. Kopie → Zmień nazwę zapisuje samą nazwę (`POST /backups/name`). Nazwy są zwykłymi ustawieniami, więc pełna kopia je zabiera.
+
 ## Historia ruchu
 
 Harmonogram co 5 minut zapisuje liczniki z `wg show dump`. Z różnic kolejnych próbek powstaje
@@ -179,7 +183,10 @@ Wykres: suma na liście peerów, osobny na stronie każdego peera. Nad osią pob
 pod osią wysyłka (własna skala, żeby mała wysyłka była widoczna). Siedem równych kolumn, każda od
 północy do północy: sześć poprzednich dni i dzisiejszy, wyróżniony; godziny, które jeszcze nie minęły,
 są zakreskowane, a przerywana linia to „teraz”. Pod kolumnami sumy dni (↓ pobrane, ↑ wysłane),
-w nagłówku sumy z całego wykresu. Góra osi to okrągła wartość tuż nad najwyższym słupkiem.
+w nagłówku sumy z całego wykresu. Góra osi to okrągła wartość tuż nad najwyższym słupkiem. Godziny sprzed
+pierwszej próbki (`traffic.hourly` → `nodata`) są przygaszone, a dzień bez żadnej próbki ma „brak
+danych” zamiast zer; dzień z historią, ale bez ruchu — „brak ruchu”. Lista peerów i strona osoby
+pokazują ruch tak samo jak wykres: ↓ pobrane (tx serwera), potem ↑ wysłane (rx), w GB/MB.
 
 W SVG są tylko słupki i linie — rozciągają się z kartą. Cały tekst (oś, dni, sumy, dymek godziny)
 jest w HTML, więc ma stałą wielkość niezależnie od szerokości karty (`ui.traffic_chart`).
@@ -539,7 +546,7 @@ wyciekło do listy procesów).
 „Zrób kopię teraz – gdzie?” (NAS / Pi / ten komputer); w środku jedna lista wszystkich kopii
 (historia panelu plus pliki znalezione na Pi i na NAS-ie, każda kopia raz) z akcjami na zaznaczonych:
 sprawdź sumę, odtwórz (okno z hasłem kopii i kontem panelu), usuń; na dole ustawienia. NAS jest
-pytany o listę tylko przyciskiem „Odśwież listę z NAS” — wynik panel pamięta i oznacza kopie,
+pytany o listę tylko przyciskiem „Odśwież listę · NAS” — wynik panel pamięta i oznacza kopie,
 których na NAS-ie już nie ma, bez ponownego budzenia serwera.
 
 Lista ma kolumny Kiedy / Gdzie / Rodzaj / Stan (`ui.backup_items`, `ui.backup_row`). Rodzaj:

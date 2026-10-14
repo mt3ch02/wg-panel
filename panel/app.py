@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from panel import i18n  # noqa: E402
 from panel.i18n import _  # noqa: E402
 from panel import (auth, db, dual, export, helperclient, import_conf, model,  # noqa: E402
-                   notify, qr, stats,
+                   names, notify, qr, stats,
                    render, scheduler, simulate, traffic, ui, wgcrypto)
 
 DB_PATH = os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")
@@ -1173,6 +1173,14 @@ def get_backups(req: Request) -> Response:
                                     scan=export.last_scan(cfg), total=db.backups_count(CONN)))
 
 
+def smb_message(cfg: dict, exc: Exception) -> str:
+    """Blad SMB w jezyku panelu, zawsze z nazwa miejsca na kopie na poczatku (dokladnie raz)."""
+    text = export.explain_smb(cfg, exc)
+    shown = i18n.helper(text)
+    name = names.storage(cfg)
+    return shown if text.startswith(name + ":") else f"{name}: {shown}"
+
+
 @route("POST", "/backups/scan")
 def post_backup_scan(req: Request) -> Response:
     """Jedyne miejsce, ktore pyta NAS o liste kopii - na klikniecie, nigdy w tle."""
@@ -1181,8 +1189,8 @@ def post_backup_scan(req: Request) -> Response:
         result = export.scan_smb(CONN)
     except Exception as exc:  # noqa: BLE001
         return redirect_err("/backups#lista",
-                            "NAS: " + i18n.helper(export.explain_smb(cfg, exc)))
-    message = _("NAS: {n} kopii.", n=result["count"])
+                            smb_message(cfg, exc))
+    message = _("{storage}: {n} kopii.", **names.kw(), n=result["count"])
     if result["added"]:
         message += " " + _("Dopisane do listy: {n} (panel ich nie znał, np. sprzed reinstalacji).",
                            n=result["added"])
@@ -1207,9 +1215,9 @@ def post_backup_delete(req: Request) -> Response:
         return redirect_err("/backups", _("Nie zaznaczyłeś żadnej kopii."))
     summary = export.delete_backups(CONN, ids)
     db.log(CONN, req.actor, "backup.delete",
-           i18n.pl("{n} (karta: {local}, NAS: {remote})", n=summary["deleted"],
-                   local=summary["local"], remote=summary["remote"]))
-    message = _("Usunięto kopie: {n} (plików na Pi: {local}, na NAS: {remote}).",
+           i18n.pl("{n} ({server}: {local}, {storage}: {remote})", n=summary["deleted"],
+                   local=summary["local"], remote=summary["remote"], **names.kw()))
+    message = _("Usunięto kopie: {n} (pliki - {server}: {local}, {storage}: {remote}).", **names.kw(),
                 n=summary["deleted"], local=summary["local"], remote=summary["remote"])
     if summary["problems"]:
         problems = "; ".join(i18n.helper(problem) for problem in summary["problems"])
@@ -1229,6 +1237,18 @@ def post_backup_settings(req: Request) -> Response:
             db.set_setting(CONN, key, req.get(key).strip())
     db.log(CONN, req.actor, "backup.settings")
     return redirect(with_msg("/backups", _("Zapisano.")))
+
+
+@route("POST", "/backups/name")
+def post_backup_name(req: Request) -> Response:
+    """Zmien nazwe - Zapisz: sama nazwa, niezaleznie od reszty ustawien kopii."""
+    key = req.get("key")
+    if key not in names.DEFAULTS:
+        return redirect_err("/backups#ustawienia", _("Nieznana nazwa."))
+    value = names.clean(req.get("value"), key)
+    db.set_setting(CONN, key, value)
+    db.log(CONN, req.actor, "backup.name", value)
+    return redirect(with_msg("/backups", _("Zapisano nazwę: {name}", name=value)) + "#ustawienia")
 
 
 @route("POST", "/backups/export")
@@ -1273,11 +1293,11 @@ def identity_note(identity: dict) -> str:
     notes = {
         "restored": _("Klucz serwera przywrócony z kopii - po zastosowaniu zmian wszyscy łączą "
                       "się swoimi dotychczasowymi plikami."),
-        "same": _("Klucz serwera tego Pi jest taki sam jak w kopii - dotychczasowe pliki osób "
-                  "działają."),
-        "changed": _("Klucz serwera tego Pi jest INNY niż w kopii, a kopia go nie zawiera. "
-                     "Dotychczasowe pliki osób nie zadziałają - każdej osobie wydaj nowy plik "
-                     "(Rotacja kluczy na karcie osoby, potem Zastosuj zmiany)."),
+        "same": _("Klucz serwera ({server}) jest taki sam jak w kopii - dotychczasowe pliki osób "
+                  "działają.", **names.kw()),
+        "changed": _("Klucz serwera ({server}) jest INNY niż w kopii, a kopia go nie zawiera. Dotychczasowe "
+                     "pliki osób nie zadziałają - każdej osobie wydaj nowy plik (Rotacja kluczy na karcie "
+                     "osoby, potem Zastosuj zmiany).", **names.kw()),
         "unknown": "",
     }
     text = notes[identity["verdict"]]
@@ -1285,8 +1305,8 @@ def identity_note(identity: dict) -> str:
         text += " " + _("Nie udało się przywrócić klucza serwera: {error}",
                         error=i18n.helper(identity["error"]))
     if identity["ca"] == "new":
-        text += " " + _("Certyfikat HTTPS: powstał nowy urząd (inna nazwa albo sieć Pi niż w kopii) "
-                        "- zainstaluj nowy ca.crt na urządzeniach.")
+        text += " " + _("Certyfikat HTTPS: powstał nowy urząd (inna nazwa albo sieć serwera niż w kopii) - "
+                        "zainstaluj nowy ca.crt na urządzeniach.")
     elif identity["ca"] == "restored":
         text += " " + _("Certyfikat HTTPS przywrócony - urządzenia nie potrzebują nowego ca.crt.")
     return text.strip()
@@ -1959,6 +1979,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(Response(ui.simple(
                     _("Błąd CSRF"), _("Odśwież stronę i spróbuj jeszcze raz.")), 403))
             request = Request(self, method, parsed.path, query, form, sess)
+            names.load(db.settings(CONN))     # nazwy urzadzen do tekstow tej strony
             ui.begin_request(path=self.path, err=query.get("err", "") if method == "GET" else "",
                              pending=request_pending if sess else None)
             try:

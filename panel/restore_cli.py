@@ -73,8 +73,7 @@ def fetch(out_path: str) -> int:
     try:
         names = export.list_smb(cfg)
     except Exception as exc:  # noqa: BLE001
-        return fail(t(f"NAS: {export.explain_smb(cfg, exc)}",
-                      f"NAS: {export.explain_smb(cfg, exc)}"))
+        return fail(export.smb_problem(cfg, exc))
     if not names:
         return fail(t(f"W {cfg['smb_share']}/{cfg['smb_path']} nie ma kopii panelu.",
                       f"No panel backups in {cfg['smb_share']}/{cfg['smb_path']}."))

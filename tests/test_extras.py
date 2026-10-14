@@ -355,6 +355,25 @@ check("wykres to SVG z opisem godzin w dymku", "<svg" in chart and 'data-when="'
 svg_part = chart[chart.index("<svg"):chart.index("</svg>")]
 check("w SVG nie ma tekstu - napisy nie rozciagaja sie z karta", "<text" not in svg_part)
 check("siedem kolumn dni pod wykresem", chart.count('class="day') == 7)
+empty = [dict(p, rx=0, tx=0, nodata=True) for p in series]
+blank = ui.traffic_chart(empty[:-1] + [dict(series[-1], rx=0, tx=0, nodata=False)], "Ruch")
+check("dni sprzed historii: „brak danych”, a nie zera", blank.count("brak danych") >= 6
+      and "↓ 0" not in blank)
+quiet = ui.traffic_chart([dict(p, rx=0, tx=0, nodata=False) for p in series], "Ruch")
+check("dzień z historią bez ruchu: „brak ruchu”", quiet.count("brak ruchu") == 7)
+
+# wlasne nazwy urzadzen: etykiety z ustawien, w kopii razem z reszta ustawien
+from panel import names  # noqa: E402
+check("nazwa: pusta wraca do domyslnej", names.clean("  ", "name_storage") == names.DEFAULTS["name_storage"])
+check("nazwa: bez znakow sterujacych i nadmiaru spacji, najwyzej 24 znaki",
+      names.clean("  Dysk\n  domowy\t", "name_storage") == "Dysk domowy"
+      and len(names.clean("x" * 60, "name_server")) == names.MAX_LENGTH)
+names.load({"name_server": "Malina", "name_storage": "Dysk"})
+check("nazwy trafiaja do tekstow panelu", ui.target_label("both") == "Dysk i Malina"
+      and ui.target_label("smb") == "tylko Dysk")
+names.load({})
+check("bez ustawien - nazwy domyslne", ui.target_label("local") == "tylko " + names.DEFAULTS["name_server"])
+
 
 # ==========================================================================
 print("\n8. Sumy kontrolne kopii - lokalnie")

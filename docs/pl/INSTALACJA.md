@@ -220,7 +220,7 @@ Sieć domową, adres Pi i interfejs instalator wykrył sam. Sprawdź je i uzupe�
 | **Podsieć LAN** | Twoja sieć domowa, np. `192.168.1.0/24` — wykryte przy instalacji |
 | Podsieć VPN | sieć tunelu, np. `10.0.0.0/24` |
 | Adres serwera w VPN | adres Pi w tunelu, np. `10.0.0.1` |
-| **Adres Pi w LAN** | stały adres Pi, np. `192.168.1.10` — wykryte przy instalacji |
+| **Adres serwera w LAN** | stały adres Pi, np. `192.168.1.10` — wykryte przy instalacji |
 | Interfejs WAN | interfejs Pi do internetu: `eth0`, `end0`, `wlan0`… — wykryte przy instalacji |
 | Port nasłuchu | port WireGuarda — domyślnie `51820`; jeśli router przekierowuje inny, popraw (na ścieżce A import w Kroku 11 i tak wpisze go z `wg0.conf`) |
 | DNS trybu full | np. `9.9.9.9` — Quad9: blokuje złośliwe domeny i nie profiluje zapytań |
@@ -299,7 +299,7 @@ Nazwy możesz od razu zmienić na prawdziwe imiona i dopisać urządzenia: `wgct
 
 **Gdzie: Przeglądarka → Tiery**
 
-Przez VPN panel otwierają tylko osoby z tieru, który ma port panelu (`8080`) w polu **Porty na samym Pi**. Domyślnie to tier **ADMIN** (`22,3389,8080`), a Ty jesteś w nim od Kroku 12 — nic nie musisz robić. Sprawdź tylko, że w karcie ADMIN jest `8080`.
+Przez VPN panel otwierają tylko osoby z tieru, który ma port panelu (`8080`) w polu **Porty na samym serwerze**. Domyślnie to tier **ADMIN** (`22,3389,8080`), a Ty jesteś w nim od Kroku 12 — nic nie musisz robić. Sprawdź tylko, że w karcie ADMIN jest `8080`.
 
 > **Dlaczego tak:** panel jest dostępny z sieci domowej, a przez VPN tylko dla wybranych tierów. Reszta użytkowników dostaje blokadę na porcie panelu, mimo że są w tej samej sieci VPN. Bez tego, będąc poza domem, nie zalogujesz się do panelu.
 
@@ -508,7 +508,7 @@ Wykonaj **Krok 7** i **Krok 8** ze ścieżki A.
 
 **Gdzie: Przeglądarka → Ustawienia**
 
-Tak jak **Krok 9** ze ścieżki A. Najważniejsze pola to **Endpoint klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820` — i **Port nasłuchu**: ten sam, który przekierowuje router (domyślny `51820`). Sprawdź też **Adres Pi w LAN**.
+Tak jak **Krok 9** ze ścieżki A. Najważniejsze pola to **Endpoint klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820` — i **Port nasłuchu**: ten sam, który przekierowuje router (domyślny `51820`). Sprawdź też **Adres serwera w LAN**.
 
 ## Krok B10 — Dodaj osoby
 
@@ -627,7 +627,7 @@ Gdy coś się nie zgadza, instalator mówi wprost, co poprawić:
 
 > **Kopia bez klucza serwera** (podstawowa albo ze starszej wersji): instalator napisze to wprost i zapyta: **1) wklej stary klucz** (z menedżera haseł — wszyscy łączą się dalej starymi plikami) albo **2) wygeneruj nowy** (osoby i ustawienia wrócą, ale każda osoba dostanie nowy plik — Krok C5).
 
-> **Z panelu zamiast z instalatora:** gdy panel jest już zainstalowany — **Kopie**, na dole strony w **Ustawieniach kopii** wpisz dane NAS-a i **Zapisz ustawienia**, potem na **Liście kopii** kliknij **Odśwież listę z NAS**. Zaznacz kopię (kliknięcie w wiersz), **Odtwórz zaznaczoną…** — w oknie zaznacz **Logowanie starym hasłem**, wpisz hasło kopii i **Odtwórz kopię**. Panel po odtworzeniu powie, czy klucz serwera wrócił z kopii i czy dotychczasowe pliki osób zadziałają.
+> **Z panelu zamiast z instalatora:** gdy panel jest już zainstalowany — **Kopie**, na dole strony w **Ustawieniach kopii** wpisz dane NAS-a i **Zapisz ustawienia**, potem na **Liście kopii** kliknij **Odśwież listę · NAS**. Zaznacz kopię (kliknięcie w wiersz), **Odtwórz zaznaczoną…** — w oknie zaznacz **Logowanie starym hasłem**, wpisz hasło kopii i **Odtwórz kopię**. Panel po odtworzeniu powie, czy klucz serwera wrócił z kopii i czy dotychczasowe pliki osób zadziałają.
 
 ## Krok C3 — Sprawdź
 
@@ -754,10 +754,10 @@ Strona **Kopie** ma trzy części: u góry **stan** (jaka kopia powstaje, kiedy 
 | Udział | `backup` |
 | Katalog na udziale | `wg-panel` |
 | Użytkownik / Hasło | `wg-backup` / hasło z Kroku 19 |
-| Na Pi: Katalog kopii na Pi | zostaw pusty (domyślny) |
-| Na Pi trzymaj ostatnie | `14` |
+| Pi: Katalog kopii | zostaw pusty (domyślny) |
+| Trzymaj ostatnie | `14` |
 
-**Zapisz ustawienia.** U góry strony, pod **Zrób kopię teraz – gdzie?**, są trzy przyciski: **Na NAS**, **Na Pi** i **Na ten komputer**. Każdy robi jedną kopię dokładnie tam i nigdzie więcej; pole **Dokąd** dotyczy tylko kopii automatycznych. Kliknij **Na NAS**.
+**Zapisz ustawienia.** U góry strony, pod **Zrób kopię teraz – gdzie?**, są trzy przyciski: **NAS**, **Pi** i **Ten komputer**. Każdy robi jedną kopię dokładnie tam i nigdzie więcej; pole **Dokąd** dotyczy tylko kopii automatycznych. Kliknij **NAS**.
 
 Masz zobaczyć: u góry trzy zielone kropki — **Rodzaj kopii: PEŁNA, zaszyfrowana**, **Automatycznie: codziennie o 03:30 → tylko NAS** i **Ostatnia kopia: … → NAS** z dopiskiem „suma zgodna”. Na **Liście kopii** nowy wiersz: Gdzie „NAS”, Rodzaj „pełna”, Stan „sprawdzona”. Na NAS-ie, w udziale `backup/wg-panel`, pojawią się dwa pliki: kopia i jej `.sha256`.
 
@@ -768,7 +768,7 @@ Masz zobaczyć: u góry trzy zielone kropki — **Rodzaj kopii: PEŁNA, zaszyfro
 | tylko NAS | tylko na NAS-ie — plik na Pi powstaje na chwilę do wysłania i zaraz znika (także gdy wysyłka się nie uda) |
 | tylko Pi | w katalogu kopii na Pi (najwyżej ostatnie 14) — nie chroni przed awarią karty |
 | NAS i Pi (dwie kopie) | w obu miejscach — odtworzenie bierze plik z Pi i nie musi budzić NAS-a |
-| Na ten komputer (tylko przycisk) | plik pobiera przeglądarka; panel go nie przechowuje i nie ma go na liście |
+| Ten komputer (tylko przycisk) | plik pobiera przeglądarka; panel go nie przechowuje i nie ma go na liście |
 
 Jeśli kopia się nie udała, czerwony pasek pokaże powód:
 
@@ -1000,7 +1000,7 @@ Po potwierdzeniu, że działa: **Wydano — skasuj klucz**. Panel zapamiętuje p
 
 ## Odtworzenie z kopii
 
-**Przeglądarka → Kopie → Lista kopii.** Każda kopia jest na liście raz — z datą, miejscem (NAS / Pi / NAS + Pi), rodzajem (pełna / zaszyfrowana / podstawowa / nieudana) i stanem sumy kontrolnej. Kopie leżące tylko na NAS-ie (np. na nowym systemie) dojdą po kliknięciu **Odśwież listę z NAS** — to jedyny przycisk, który pyta NAS o listę, i panel nie robi tego w tle (NAS może spać).
+**Przeglądarka → Kopie → Lista kopii.** Każda kopia jest na liście raz — z datą, miejscem (NAS / Pi / NAS + Pi), rodzajem (pełna / zaszyfrowana / podstawowa / nieudana) i stanem sumy kontrolnej. Kopie leżące tylko na NAS-ie (np. na nowym systemie) dojdą po kliknięciu **Odśwież listę · NAS** — to jedyny przycisk, który pyta NAS o listę, i panel nie robi tego w tle (NAS może spać).
 
 **Co znaczą oznaczenia na liście kopii** (to samo jest w panelu pod listą, w „Co znaczą oznaczenia?”):
 
@@ -1049,7 +1049,7 @@ Kopia, której nie próbowałeś odtworzyć, to tylko nadzieja. Są dwa poziomy.
 
 **Gdzie: Przeglądarka → Kopie, potem Pi**
 
-1. Pod **Zrób kopię teraz** kliknij **Na Pi**, potem **Na NAS** — na Liście kopii mają się pojawić dwa nowe wiersze (Gdzie „Pi” i „NAS”).
+1. Pod **Zrób kopię teraz** kliknij **Pi**, potem **NAS** — na Liście kopii mają się pojawić dwa nowe wiersze (Gdzie „Pi” i „NAS”).
 2. Zaznacz oba i kliknij **Sprawdź zaznaczone** — panel pobiera pliki z miejsca, w którym leżą (także z NAS-a), i porównuje sumy SHA-256. Każdy wiersz ma mieć stan **sprawdzona**.
 3. Na Pi:
 
@@ -1088,9 +1088,9 @@ Masz zobaczyć: te same osoby, tiery i nazwy co na prawdziwym Pi (porównaj z `w
 
 Zaznacz kopie na Liście kopii (kliknięcie w wiersz; kwadracik w nagłówku zaznacza wszystkie, **Zaznacz nieudane** — wszystkie nieudane) i kliknij **Usuń zaznaczone**. Panel usuwa pliki kopii razem z `.sha256` — z Pi i z NAS-a — i dopiero potem wpis z listy. Jeśli pliku nie da się usunąć (np. NAS jest wyłączony), wpis zostaje, żeby nie zgubić śladu po pliku, który dalej tam leży.
 
-> **Kopie sprzed reinstalacji** (zrobione przez poprzedni system) panel na początku nie zna — widać je dopiero po **Odśwież listę z NAS**. Wtedy trafiają na listę jako „znaleziona” i można je sprawdzić, odtworzyć albo usunąć jak każdą inną. Odwrotnie: kopia, której pliku po odświeżeniu listy nie ma już na NAS-ie (np. usunięta ręcznie), dostaje stan „brak pliku” — jej wpis po prostu usuń.
+> **Kopie sprzed reinstalacji** (zrobione przez poprzedni system) panel na początku nie zna — widać je dopiero po **Odśwież listę · NAS**. Wtedy trafiają na listę jako „znaleziona” i można je sprawdzić, odtworzyć albo usunąć jak każdą inną. Odwrotnie: kopia, której pliku po odświeżeniu listy nie ma już na NAS-ie (np. usunięta ręcznie), dostaje stan „brak pliku” — jej wpis po prostu usuń.
 
-> **„Na Pi trzymaj ostatnie” sprząta tylko Pi.** Kopie na NAS-ie zostają, dopóki ich nie usuniesz — jedna ma kilka KB, więc nawet codzienne kopie przez rok to około 2 MB.
+> **„Trzymaj ostatnie” sprząta tylko Pi.** Kopie na NAS-ie zostają, dopóki ich nie usuniesz — jedna ma kilka KB, więc nawet codzienne kopie przez rok to około 2 MB.
 
 > ⚠ Zostaw zawsze przynajmniej jedną pełną kopię w stanie „sprawdzona” — najlepiej na NAS-ie.
 
@@ -1115,6 +1115,20 @@ Każda zmiana w ustawieniach, osobach i regułach czeka, aż klikniesz **Zastosu
 Zakładka **Hosty**: wpisz raz `drukarka = 192.168.1.70`, `kamera = 192.168.1.80` itd. W regułach używasz nazw. Zmiana adresu w jednym miejscu przestawia wszystkie reguły.
 
 > ⚠ Ustaw urządzeniom z katalogu stałe adresy (rezerwacja DHCP na routerze). Katalog tylko tłumaczy nazwę na adres — jeśli urządzenie samo zmieni IP, reguła wskaże w pustkę.
+
+## Własne nazwy urządzeń
+
+**Gdzie: Przeglądarka → Kopie → na dole Ustawienia kopii**
+
+Panel nazywa dwa urządzenia: **serwer**, na którym działa (domyślnie „Pi”), i **miejsce na kopie** (udział SMB, domyślnie „NAS”). Obie nazwy możesz zmienić:
+
+1. Przy nagłówku sekcji (np. **NAS**) kliknij **Zmień nazwę**.
+2. Wpisz nazwę (najwyżej 24 znaki) — nagłówek zmienia się w trakcie pisania.
+3. **Zapisz** (albo Enter) — strona się odświeży i nowa nazwa jest wszędzie. **Anuluj** (albo Esc) wraca do poprzedniej.
+
+Nazwa zapisuje się sama, niezależnie od reszty ustawień. Jeśli w ustawieniach kopii masz inne niezapisane zmiany, strona się nie przeładuje, żeby ich nie zgubić. Puste pole przywraca nazwę domyślną.
+
+> Nazwa to etykieta — zawsze stoi w formie podstawowej, więc pasuje każda. Nazwy zapisują się w pełnej kopii i wracają po odtworzeniu. Instalator (także `install.sh --restore`) używa nazw domyślnych, bo działa, zanim panel ma bazę.
 
 ## Jak długo panel pamięta historię
 
@@ -1167,7 +1181,7 @@ Wpisane `0` znaczy **bez limitu** — panel niczego z tej listy nie kasuje. Baza
 | „interfejs WireGuard: problem" | **użytkownicy nie mają dostępu** — `systemctl status wg-quick@wg0`, potem `sudo systemctl restart wg-quick@wg0` |
 | „zasilanie Pi" | za słaby zasilacz albo kabel — wymień na oryginalny (5 V, 3 A dla Pi 4 / 5 A dla Pi 5); grozi uszkodzeniem karty |
 | „temperatura Pi" | sprawdź chłodzenie i czy obudowa nie stoi w zamkniętej szafce |
-| „miejsce na karcie" | `df -h`; zmniejsz „Na Pi trzymaj ostatnie” w Ustawieniach kopii albo przenieś kopie na NAS |
+| „miejsce na karcie" | `df -h`; zmniejsz „Trzymaj ostatnie” w Ustawieniach kopii albo przenieś kopie na NAS |
 | „certyfikat HTTPS" | `wgctl tls --renew`; jeśli błąd — `journalctl -u wg-panel-helper -n 40` |
 | karta SD padła | ścieżka C z początku instrukcji |
 

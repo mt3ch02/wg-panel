@@ -302,8 +302,8 @@ try:
     check("plik położony ręcznie w katalogu roboczym trafia na listę (raz)",
           export.adopt_local(adopt) == 1 and export.adopt_local(adopt) == 0)
     found = adopt.execute("SELECT * FROM backups WHERE path LIKE ?", ("%" + dropped,)).fetchone()
-    check("… z sumą z pliku .sha256 i opisem „znaleziona na Pi”",
-          found["sha256"] == export.sha256(b"{}") and found["detail"] == "znaleziona na Pi"
+    check("… z sumą z pliku .sha256 i opisem „znaleziona: Pi” (nazwa serwera z ustawień)",
+          found["sha256"] == export.sha256(b"{}") and found["detail"] == "znaleziona: Pi"
           and found["target"] == "local")
     victim = next(r for r in adopted if not r["path"].endswith(".enc"))
     summary = export.delete_backups(adopt, [victim["id"]])
@@ -346,7 +346,8 @@ try:
     result = cli("fetch", out_file, WGPANEL_RESTORE_PICK=pick, WGPANEL_RESTORE_PASSPHRASE="zle")
     check("fetch ze złym hasłem kopii: przerwane", result.returncode == 1)
     result = cli("fetch", out_file, WGPANEL_RESTORE_PASS="zle")
-    check("złe hasło NAS: po ludzku", result.returncode == 1 and "odrzucił login albo hasło" in result.stderr,
+    check("złe hasło NAS: po ludzku", result.returncode == 1 and "NAS: odrzucony login albo hasło" in result.stderr
+          and "NAS: NAS" not in result.stderr,
           result.stderr)
     result = cli("fetch", out_file, WGPANEL_RESTORE_PATH="wg-panel")
     check("zły katalog: podpowiada istniejące", "nie ma katalogu wg-panel - są tam: nasbackup, photos"
@@ -449,7 +450,7 @@ try:
     page_html = ui.backups_page({"username": "t", "csrf": "c"}, cfg_page, rows, [], scan=scan)
     check("jeden przycisk NAS (odświeżenie listy) i żadnego „Sprawdź kopie”",
           page_html.count('action="/backups/scan"') == 1 and "Sprawdź kopie" not in page_html
-          and page_html.count("Odśwież listę z NAS") == 1)
+          and page_html.count("Odśwież listę · NAS") == 1)
     check("akcje na zaznaczonych: sprawdź, odtwórz, usuń (usuwanie pyta)",
           'data-verify' in page_html and 'data-restore' in page_html
           and re.search(r'formaction="/backups/delete"[^>]*data-confirm=', page_html))
@@ -471,7 +472,7 @@ try:
     page_html = ui.backups_page({"username": "t", "csrf": "c"}, {}, [], [])
     check("nowy system: podpowiedź, a przycisk NAS nieaktywny bez danych NAS",
           "Panel nie zna jeszcze żadnej kopii" in page_html
-          and re.search(r"<button disabled[^>]*>Odśwież listę z NAS", page_html))
+          and re.search(r"<button disabled[^>]*>Odśwież listę · NAS", page_html))
 finally:
     helper.terminate()
 

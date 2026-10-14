@@ -44,7 +44,8 @@ i reguły iptables, pokazuje różnicę przed zastosowaniem i sam cofa zmianę, 
 | **Integralność** | Wykrywa ręczną edycję `wg0.conf`, reguły dopisane do łańcuchów panelu, klucze dodane przez `wg set` i reguły wstawione przed łańcuch panelu. |
 | **Kopie zapasowe** | Codziennie: na NAS (udział SMB), na Pi albo do pobrania na komputer. Pełna kopia jest zaszyfrowana i zawiera klucz serwera, więc jednym poleceniem odtworzysz z niej całe Pi. |
 | **HTTPS** | Własny urząd certyfikacji panelu, ograniczony (X.509 Name Constraints) do sieci domowej, VPN i nazwy Pi. Działa też własny certyfikat, np. z Let's Encrypt. |
-| **Historia ruchu** | Wykres godzinowy z 7 dni — każdy dzień w osobnej kolumnie z sumą, dzisiejszy wyróżniony — łączny i dla każdej osoby, z wykrywaniem anomalii. |
+| **Własne nazwy urządzeń** | „Pi” i „NAS” to etykiety, które zmienisz w Kopiach (Zmień nazwę); nowa nazwa jest wszędzie, także w alertach, i jedzie razem z kopią. |
+| **Historia ruchu** | Wykres godzinowy z 7 dni — każdy dzień w osobnej kolumnie z sumą, dzisiejszy wyróżniony — łączny i dla każdej osoby, z wykrywaniem anomalii. Lista peerów pokazuje ↓ pobrane / ↑ wysłane tak samo, więc liczby zgadzają się z wykresem. |
 | **IPv6** | Opcjonalnie. Reguły działają w obu rodzinach adresów. |
 | **Linki jednorazowe, kasowanie klucza** | Przekazujesz konfigurację bez wysyłania pliku, potem kasujesz klucz prywatny z serwera. |
 | **`wgctl`** | Wszystko, co panel, z terminala. Ta sama baza, ten sam helper. |
@@ -88,7 +89,7 @@ Potem:
 2. W **Ustawieniach** wpisz **Endpoint klientów**: nazwę DDNS albo publiczny IP z portem (np. `vpn.example.org:51820`). Sprawdź też wykryte adresy.
 3. W **Hostach** sprawdź adres podpowiedziany dla `nas`. Korzysta z niego tier NAS.
 4. Dodaj osoby w **Peerach**, potem **Zastosuj zmiany**. Pierwsze zastosowanie podnosi tunel.
-5. Przypisz siebie do tieru ADMIN. Przez VPN panel otwierają tylko tiery, które mają jego port w polu **Porty na samym Pi**; domyślnie tylko ADMIN (`22,3389,8080`).
+5. Przypisz siebie do tieru ADMIN. Przez VPN panel otwierają tylko tiery, które mają jego port w polu **Porty na samym serwerze**; domyślnie tylko ADMIN (`22,3389,8080`).
 
 ## Aktualizacja
 
@@ -176,7 +177,7 @@ usuń). Ustawienia są na dole.
 - **Miejsce kopii** wybierasz sam: tylko NAS (plik jest na Pi tylko na czas wysyłki), tylko Pi albo oba.
 - **Sumy kontrolne.** Każda kopia ma SHA-256 w bazie i w pliku `.sha256`. Zaraz po zapisie panel pobiera kopię z miejsca, w którym faktycznie leży, i ją sprawdza; każda kopia dobowa sprawdza też trzy poprzednie.
 - **Szyfrowanie:** scrypt → ChaCha20 (RFC 8439) + HMAC-SHA256, w standardowej bibliotece, sprawdzone wektorami testowymi z RFC. Hasło kopii trzymaj w menedżerze haseł.
-- **Panel nie odpytuje NAS-a w tle.** O listę pyta NAS tylko po kliknięciu **Odśwież listę z NAS**, więc uśpiony NAS śpi dalej.
+- **Panel nie odpytuje NAS-a w tle.** O listę pyta NAS tylko po kliknięciu **Odśwież listę · NAS**, więc uśpiony NAS śpi dalej.
 - Kopia podstawowa zawiera klucze współdzielone (PSK) wszystkich osób jawnym tekstem. Panel pokazuje wtedy czerwoną kropkę.
 
 ## Model bezpieczeństwa
@@ -197,7 +198,7 @@ przeglądarka            wgctl (terminal)
 
 - **Panel nigdy nie wysyła poleceń ani gotowej treści plików.** Wysyła model danych. Helper sprawdza go od nowa i sam buduje pliki, więc przejęty proces WWW nie zmusi helpera do niczego, czego helper nie przewiduje.
 - **Klucz prywatny serwera nigdy nie trafia do bazy ani do panelu.** Helper czyta go z dysku przy generowaniu plików.
-- **Nigdy nie wystawiaj panelu do internetu.** Panel słucha na adresie VPN (i w LAN-ie, jeśli tak wybierzesz). Z VPN otworzą go tylko tiery, które mają jego port w polu **Porty na samym Pi**.
+- **Nigdy nie wystawiaj panelu do internetu.** Panel słucha na adresie VPN (i w LAN-ie, jeśli tak wybierzesz). Z VPN otworzą go tylko tiery, które mają jego port w polu **Porty na samym serwerze**.
 - **Bez niezależnego audytu bezpieczeństwa.** Projekt ma obronę warstwową, ale nikt spoza niego go nie sprawdzał. Nie wystawiaj panelu do internetu i rób kopie, o które prosi instrukcja.
 - Logowanie ma limit (5 prób na 5 minut z jednego adresu). Hasła są chronione przez scrypt, kod z aplikacji (TOTP) jest opcjonalny. Każdy POST ma token CSRF. Ciasteczka są HttpOnly i SameSite=Strict, a jednostki systemd utwardzone.
 

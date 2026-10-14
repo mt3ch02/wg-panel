@@ -45,7 +45,8 @@ undoes the change automatically if it cut you off.
 | **Integrity check** | Detects hand edits to `wg0.conf`, rules added to the panel's chains, keys added with `wg set`, and rules inserted in front of the panel's chain. |
 | **Backups** | Daily, to a NAS (SMB share), to the Pi, or downloaded to your computer. A full backup is encrypted and contains the server key, so you can rebuild the whole Pi from it with one command. |
 | **HTTPS** | The panel's own certificate authority, limited by X.509 name constraints to your home network, the VPN and the Pi's name. Your own certificate (for example Let's Encrypt) also works. |
-| **Traffic history** | Hourly chart for 7 days — one column per day with daily totals, today highlighted — total and per peer, with anomaly detection. |
+| **Your own device names** | "Pi" and "NAS" are labels you can rename (Backups → Rename); the new name shows up everywhere, including alerts, and travels with the backup. |
+| **Traffic history** | Hourly chart for 7 days — one column per day with daily totals, today highlighted — total and per peer, with anomaly detection. The peer list shows ↓ downloaded / ↑ uploaded the same way, so the numbers match the chart. |
 | **IPv6** | Optional. Rules apply to both address families. |
 | **One-time links, key deletion** | Hand over a configuration without sending the file around, then delete the private key from the server. |
 | **`wgctl`** | Everything the panel does, from the terminal. Same database, same helper. |
@@ -91,7 +92,7 @@ Then:
 3. In **Settings**, set **Client endpoint** to your DDNS name or public IP with the port (for example `vpn.example.org:51820`) and check the detected addresses.
 4. In **Hosts**, check the address suggested for `nas`. The NAS tier uses it.
 5. Add people in **Peers**, then **Apply changes**. The first apply brings the tunnel up.
-6. Put yourself in the ADMIN tier. Over the VPN, the panel opens only for tiers that list its port under **Ports on the Pi itself**, and by default that's only ADMIN (`22,3389,8080`).
+6. Put yourself in the ADMIN tier. Over the VPN, the panel opens only for tiers that list its port under **Ports on the server itself**, and by default that's only ADMIN (`22,3389,8080`).
 
 ## Updating
 
@@ -180,7 +181,7 @@ ones (check checksum, restore, delete). Settings are at the bottom.
 - **Where a backup goes** is your choice: NAS only (the file exists on the Pi only while it's being sent), the Pi only, or both.
 - **Checksums.** Every backup gets a SHA-256 stored in the database and in a `.sha256` file. Right after saving, the panel downloads the backup from where it actually lives and checks it; each daily backup also re-checks the three previous ones.
 - **Encryption:** scrypt → ChaCha20 (RFC 8439) + HMAC-SHA256, implemented in the standard library and tested against the RFC vectors. Keep the backup password in a password manager.
-- **The NAS isn't polled in the background.** The list asks the NAS only when you click **Refresh list from NAS**, so a sleeping NAS stays asleep.
+- **The NAS isn't polled in the background.** The list asks the NAS only when you click **Refresh list · NAS**, so a sleeping NAS stays asleep.
 - A basic backup contains the pre-shared keys of all peers in plain text. The panel shows a red dot when that is the case.
 
 ## Security model
@@ -201,7 +202,7 @@ browser                 wgctl (terminal)
 
 - **The panel never sends commands or ready-made file contents.** It sends a data model. The helper validates it again and renders the files itself, so a compromised web process can't make the helper do anything it wasn't written to do.
 - **The server private key never enters the database or the panel.** The helper reads it from disk when rendering.
-- **Never expose the panel to the internet.** It listens on the VPN address (and your LAN if you choose). From the VPN, only tiers that list the panel's port under **Ports on the Pi itself** can open it.
+- **Never expose the panel to the internet.** It listens on the VPN address (and your LAN if you choose). From the VPN, only tiers that list the panel's port under **Ports on the server itself** can open it.
 - **No independent security audit.** The design is defence in depth, but nobody outside the project has reviewed it. Keep the panel off the internet and take the snapshots the guide asks for.
 - Logins are rate-limited (5 attempts per 5 minutes per address). Passwords use scrypt, and TOTP is optional. Every POST carries a CSRF token. Cookies are HttpOnly and SameSite=Strict, and the systemd units are hardened.
 

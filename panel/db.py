@@ -5,6 +5,7 @@ import ipaddress
 import json
 import sqlite3
 
+from . import names
 from .i18n import _
 import time
 
@@ -223,6 +224,9 @@ DEFAULT_SETTINGS = {
     "alert_two_devices": "1",          # ten sam plik na dwoch urzadzeniach naraz
     "alert_expiry": "1",
     "alerts_quiet_minutes": "30",      # nie powtarzaj tego samego alertu czesciej
+    # nazwy urzadzen - etykiety w calym panelu (panel/names.py)
+    "name_server": names.DEFAULTS["name_server"],
+    "name_storage": names.DEFAULTS["name_storage"],
     # kopie zapasowe
     "backup_enabled": "0",
     "backup_target": "local",          # local | smb | both (export.TARGETS)

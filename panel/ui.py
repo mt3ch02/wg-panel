@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.parse
 
-from . import db, dual, export, i18n, notify, render
+from . import db, dual, export, i18n, names, notify, render
 from .i18n import _
 
 
@@ -173,6 +173,57 @@ PANEL_JS = r"""
 document.documentElement.classList.add("js");   // bez JS pasek zapisu jest widoczny zawsze
 
 // --- niezapisane zmiany: pasek "Zapisz zmiany" dopiero po zmianie pola ---
+// --- kopie: wlasne nazwy urzadzen (Zmien nazwe -> Zapisz / Anuluj) ---
+function wgRenameParts(key) {
+  var head = document.querySelector('[data-name-of="' + key + '"]');
+  var row = head.parentNode;
+  return {head: head, edit: row.querySelector(".rename-btn"), actions: row.querySelector(".rename-actions"),
+          box: document.getElementById("rename-" + key)};
+}
+function wgRename(key) {
+  var p = wgRenameParts(key), input = p.box.querySelector("input");
+  p.box.hidden = false; p.actions.hidden = false; p.edit.hidden = true;
+  input.focus(); input.select();
+  input.oninput = function () { p.head.textContent = input.value.trim() || input.dataset.default; };
+  input.onkeydown = function (ev) {
+    if (ev.key === "Enter") { ev.preventDefault(); wgRenameSave(key); }
+    if (ev.key === "Escape") { ev.preventDefault(); wgRenameCancel(key); }
+  };
+}
+function wgRenameClose(key) {
+  var p = wgRenameParts(key);
+  p.box.hidden = true; p.actions.hidden = true; p.edit.hidden = false;
+}
+function wgRenameCancel(key) {
+  var p = wgRenameParts(key), input = p.box.querySelector("input");
+  input.value = input.dataset.saved;
+  p.head.textContent = input.dataset.saved;
+  wgRenameClose(key);
+}
+function wgRenameSave(key) {
+  var p = wgRenameParts(key), input = p.box.querySelector("input");
+  var form = p.head.closest("form");
+  var value = input.value.trim() || input.dataset.default;
+  var body = new URLSearchParams({csrf: form.querySelector('[name="csrf"]').value, key: key, value: value});
+  fetch("/backups/name", {method: "POST", body: body, credentials: "same-origin"}).then(function (r) {
+    if (!r.ok) throw new Error(String(r.status));
+    input.value = input.dataset.saved = value;
+    p.head.textContent = value;
+    // bez innych niezapisanych zmian - przeladowanie, nowa nazwa od razu wszedzie;
+    // z niezapisanymi zmianami - zostajemy, zeby ich nie zgubic
+    if (form.dataset.initial === new URLSearchParams(new FormData(form)).toString()) {
+      location.reload();
+      return;
+    }
+    wgRenameClose(key);
+  }).catch(function () { p.head.textContent = input.dataset.saved; wgRenameClose(key); });
+}
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("form.settings").forEach(function (form) {
+    form.dataset.initial = new URLSearchParams(new FormData(form)).toString();
+  });
+});
+
 function wgSnapshot(form) {
   var out = {};
   Array.prototype.forEach.call(form.elements, function (el) {
@@ -686,8 +737,15 @@ function wgHandshakeText(seconds, now) {{
   if (d < 172800) return [WG_T.d1_ago, state];
   return [WG_T.d_ago.replace("{{n}}", Math.floor(d / 86400)), state];
 }}
+function wgTransfer(down, up) {{
+  var part = function (css, arrow, value) {{
+    var t = wgBytes(value).split(" ");
+    return '<span class="tr ' + css + '"><i>' + arrow + '</i>' + t[0] + '<span class="unit">' + t[1] + '</span></span>';
+  }};
+  return part("down", "↓", down) + part("up", "↑", up);
+}}
 function wgBytes(value) {{
-  var units = ["B", "KiB", "MiB", "GiB", "TiB"], i = 0;
+  var units = ["B", "KB", "MB", "GB", "TB"], i = 0;
   while (value >= 1024 && i < units.length - 1) {{ value /= 1024; i++; }}
   return (i === 0 ? value : value.toFixed(1)) + " " + units[i];
 }}
@@ -717,7 +775,7 @@ function wgPoll() {{
         if (cell) cell.dataset.handshake = peer.handshake;
         var transfer = row.querySelector("td[data-transfer]");
         if (transfer && (peer.rx || peer.tx)) {{
-          transfer.textContent = wgBytes(peer.rx) + " / " + wgBytes(peer.tx);
+          transfer.innerHTML = wgTransfer(peer.tx, peer.rx);
         }}
       }});
       wgTick();
@@ -807,8 +865,8 @@ def tls_card(sess, info: dict, cfg: dict | None = None) -> str:
         state = "<p>" + _("Panel działa po HTTPS z Twoim certyfikatem, ważnym do {date}. Gdy certbot "
                           "go odnowi, panel sam weźmie nowy (sprawdza co 12 h).", date=until) + "</p>"
     else:
-        state = "<p>" + _("Panel działa po HTTPS. Certyfikat ważny do {date} - odnawia się sam "
-                          "na 30 dni przed końcem i po zmianie adresu Pi.", date=until) + "</p>"
+        state = "<p>" + _("Panel działa po HTTPS. Certyfikat ważny do {date} - odnawia się sam na 30 dni przed "
+                          "końcem i po zmianie adresu serwera.", date=until) + "</p>"
     error = (f'<p class="banner err"><span>{e(i18n.helper(info["error"]))}</span></p>'
              if info.get("error") else "")
     names = ", ".join(info.get("ips", []) + info.get("dns", []) + info.get("names", []))
@@ -836,8 +894,8 @@ def tls_card(sess, info: dict, cfg: dict | None = None) -> str:
              f"    proxy_set_header X-Forwarded-For $remote_addr;\n"
              f"    proxy_set_header X-Forwarded-Proto https;\n}}")
     proxies = cfg.get("proxy_trusted", "")
-    ca_step = (_("Pobierz certyfikat urzędu panelu ({link}) i skopiuj go na serwer proxy - proxy "
-                 "łączy się z Pi po HTTPS i sprawdza certyfikat panelu, więc odcinek do Pi też jest "
+    ca_step = (_("Pobierz certyfikat urzędu panelu ({link}) i skopiuj go na serwer proxy - proxy łączy "
+                 "się z panelem po HTTPS i sprawdza jego certyfikat, więc odcinek do panelu też jest "
                  "szyfrowany.", link='<a href="/tls/ca.crt">wg-panel-ca.crt</a>') if mode == "self" else
                _("Przy własnym certyfikacie zamiast {option} ustaw w proxy nazwę z certyfikatu "
                  "({server_name}).", option="<code>tls_trusted_ca_certs</code>",
@@ -877,11 +935,10 @@ def tls_card(sess, info: dict, cfg: dict | None = None) -> str:
             <p class="muted">Caddy ({_("do bloku z Twoją domeną")}):</p>
             <pre>{e(caddy)}</pre>
             <details><summary>nginx</summary><pre>{e(nginx)}</pre></details>
-            <p class="muted">{_("Uwaga: przez proxy stronę logowania zobaczy każdy, kto ma dostęp do "
-                                "proxy - także osoby z VPN, którym panel sam by jej nie pokazał. Włącz "
-                                "kod z aplikacji (TOTP) i w proxy ogranicz, kto może otworzyć panel. "
-                                "Zapora Pi musi wpuszczać serwer proxy na port panelu (instalator: "
-                                "{lan}).", lan="<code>LAN_ACCESS</code>")}</p>
+            <p class="muted">{_("Uwaga: przez proxy stronę logowania zobaczy każdy, kto ma dostęp do proxy - także "
+                                "osoby z VPN, którym panel sam by jej nie pokazał. Włącz kod z aplikacji (TOTP) i w "
+                                "proxy ogranicz, kto może otworzyć panel. Zapora serwera musi wpuszczać serwer proxy "
+                                "na port panelu (instalator: {lan}).", lan="<code>LAN_ACCESS</code>")}</p>
           </details>
           <label class="full">{_("Publiczny adres panelu (do linków w powiadomieniach)")}
             <input name="panel_url" value="{e(cfg.get('panel_url', ''))}" placeholder="https://panel.example.com"></label>
@@ -936,8 +993,8 @@ def tls_page(sess, info: dict, via_tls: bool) -> str:
                      "certyfikat urzędu, który wystawia certyfikat panelu.")}</p>
         <p><a class="button primary" href="/tls/ca.crt">{_("Pobierz certyfikat")}</a></p>
         <h2>{_("Sprawdź, czy to ten sam certyfikat")}</h2>
-        <p>{_("Odcisk SHA-256 musi się zgadzać z tym, co wypisał instalator na Pi (albo polecenie "
-              "{command}):", command="<code>wgctl tls</code>")}</p>
+        <p>{_("Odcisk SHA-256 musi się zgadzać z tym, co wypisał instalator na serwerze albo "
+              "polecenie {command}:", command="<code>wgctl tls</code>")}</p>
         <p><code class="fingerprint">{e(info["ca_fingerprint"])}</code></p>
         <p class="muted">{_("Ten urząd może poświadczać wyłącznie: {names}. Nawet gdyby ktoś wykradł "
                             "jego klucz, nie podrobi nim żadnej innej strony.", names=e(permitted))}</p>
@@ -946,8 +1003,8 @@ def tls_page(sess, info: dict, via_tls: bool) -> str:
         <details><summary>Android</summary>{android}</details>
         <details><summary>{_("Windows (Chrome, Edge)")}</summary>{windows}</details>
         <details><summary>macOS</summary>{macos}</details>
-        <p class="muted">{_("Po instalacji otwieraj panel przez https:// - przez VPN pod adresem "
-                            "{address}, w domu pod adresem Pi w sieci lokalnej.", address=e(address))}</p>
+        <p class="muted">{_("Po instalacji otwieraj panel przez https:// - przez VPN pod adresem {address}, w domu "
+                            "pod adresem serwera w sieci lokalnej.", address=e(address))}</p>
       </div>""", sess)
 
 
@@ -1039,13 +1096,14 @@ def _since_title(known: dict) -> str:
         "%Y-%m-%d", time.localtime(known["since"])))) + '"'
 
 
-def _bytes(value: int) -> str:
-    step = float(value)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if step < 1024:
-            return f"{step:.1f} {unit}"
-        step /= 1024
-    return f"{step:.1f} PiB"
+def _transfer(known: dict) -> str:
+    """Ruch osoby tak jak na wykresie: najpierw pobrane (tx serwera), potem wyslane (rx)."""
+    def part(css, arrow, value):
+        number, _sep, unit = _human(value).partition(" ")
+        return (f'<span class="tr {css}"><i>{arrow}</i>{e(number)}'
+                f'<span class="unit">{e(unit)}</span></span>')
+    return part("down", "↓", known["tx"]) + part("up", "↑", known["rx"])
+
 
 
 def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str = "",
@@ -1076,7 +1134,7 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
         }.get(peer["state"], "")
         transfer = ""
         if stat or known["rx"] or known["tx"]:
-            transfer = f'{_bytes(known["rx"])} / {_bytes(known["tx"])}'
+            transfer = _transfer(known)
         warning = ('<span class="badge warn">' + e(warnings[peer["id"]]) + '</span>'
                    if warnings.get(peer["id"]) else "")
         if peer["id"] in dual_use:
@@ -1091,7 +1149,7 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
             <td class="c-state">{state_badge}</td>
             <td class="hs {css} c-hs" data-label="{labels['hs']}"
                 data-handshake="{known['handshake']}">{e(when)}</td>
-            <td class="muted transfer c-transfer" data-label="{e(labels['traffic'])}" data-transfer="1"{_since_title(known)}>{e(transfer)}</td>
+            <td class="muted transfer c-transfer" data-label="{e(labels['traffic'])}" data-transfer="1"{_since_title(known)}>{transfer}</td>
             <td class="muted c-exp" data-label="{e(labels['until'])}">{e(expiry.get(peer['id'], '—'))}</td>
           </tr>""")
 
@@ -1171,8 +1229,8 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
         <div class="card tamper">
           <h2>{_("Konfiguracja zmieniona poza panelem")}</h2>
           <ul>{items}</ul>
-          <p class="muted">{_("Jeśli to nie Ty, ktoś ma dostęp do Raspberry Pi. Zobacz szczegóły "
-                              "i przywróć stan z panelu.")}</p>
+          <p class="muted">{_("Jeśli to nie Ty, ktoś ma dostęp do serwera ({server}). Zobacz szczegóły i przywróć "
+                              "stan z panelu.", **names.kw())}</p>
           <a class="button danger" href="/integrity">{_("Szczegóły")}</a>
         </div>"""
 
@@ -1184,7 +1242,7 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
         </div>"""
 
     heads = "".join(f"<th>{h}</th>" for h in (
-        _("Nazwa"), "IP", _("Tier"), _("Stan"), "Handshake", "rx / tx", _("Ważny do")))
+        _("Nazwa"), "IP", _("Tier"), _("Stan"), "Handshake", _("pobrane / wysłane"), _("Ważny do")))
     body = f"""
       {health}
       {drift_box}
@@ -1433,7 +1491,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
           {ip6}
           <div><span class="muted">handshake</span><strong class="{css}">{e(when)}</strong></div>
           <div><span class="muted">endpoint</span><strong>{e(endpoint)}</strong></div>
-          <div{_since_title(known)}><span class="muted">{_("ruch łącznie")}</span><strong>{e(_bytes(known['rx']))} / {e(_bytes(known['tx']))}</strong></div>
+          <div{_since_title(known)}><span class="muted">{_("ruch łącznie")}</span><strong>{_transfer(known)}</strong></div>
           <div><span class="muted">{_("stan")}</span><strong>{e(state_names.get(peer['state'], peer['state']))}</strong></div>
           <div><span class="muted">{_("ważny do")}</span><strong>{e(expires_label)}</strong></div>
         </div>
@@ -1567,7 +1625,7 @@ def tiers_page(sess, tiers, flash: str = "", error: str = "", alerts: int = 0) -
         f'<option value="{k}">{e(_(v))}</option>' for k, v in render.TUNNEL_MODES.items())
     labels = {"action": _("Akcja"), "target": _("Cel"), "comment": _("Komentarz"),
               "ports": _("Porty"), "desc": _("Opis"), "tunnel": _("Co idzie przez VPN"),
-              "list": _("Własna lista"), "host": _("Porty na samym Pi")}
+              "list": _("Własna lista"), "host": _("Porty na samym serwerze")}
     cards = []
     for tier in tiers:
         rules = json.loads(tier["rules_json"] or "[]")
@@ -1691,13 +1749,13 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     # codzienne pola na wierzchu, reszta schowana pod "Zaawansowane"
     fields = [
         ("lan", _("Podsieć LAN")), ("vpn", _("Podsieć VPN")), ("server_ip", _("Adres serwera w VPN")),
-        ("server_lan", _("Adres Pi w LAN")),
+        ("server_lan", _("Adres serwera w LAN")),
         ("wan_if", _("Interfejs WAN")), ("listen_port", _("Port nasłuchu")),
         ("endpoint", _("Endpoint klientów")), ("dns_full", _("DNS trybu full")),
     ]
     advanced = [
         ("wg_iface", _("Interfejs WireGuard")), ("chain", _("Nazwa łańcucha")),
-        ("confirm_seconds", _("Czas na potwierdzenie [s, 30-900]")),
+        ("confirm_seconds", _("Czas na potwierdzenie [s]")),
         ("keepalive", "PersistentKeepalive"), ("mtu", _("MTU klienta")),
         ("panel_port", _("Port panelu")),
         ("expiry_warn_days", _("Ostrzeżenie [dni]")),
@@ -1708,9 +1766,10 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     ]
     hints = {
         "endpoint": _("DDNS albo publiczny IP z portem"),
-        "server_lan": _("adres Pi w sieci domowej"),
+        "server_lan": _("adres serwera w sieci domowej"),
         "dns_full": _("trafia do plików z całym ruchem"),
         "mtu": _("puste = domyślne"),
+        "confirm_seconds": _("od {low} do {high}", low=db.CONFIRM_MIN, high=db.CONFIRM_MAX),
         "audit_days": _("starsze znikają; 0 = bez limitu"),
         "alerts_days": _("starsze znikają; 0 = bez limitu"),
         "traffic_anomaly_factor": _("ile razy więcej niż zwykle"),
@@ -1744,8 +1803,8 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     ipv6_help = _("Po włączeniu każdy peer dostaje adres IPv6 odpowiadający IPv4 (10.0.0.4 → "
                   "fd42:42:42::4), a reguły działają w obu rodzinach naraz - blokada LAN obejmuje też "
                   "prefiks IPv6 sieci domowej. Peerom trzeba potem wydać nowe pliki konfiguracyjne.")
-    hosts_hint = _("Adres NAS i innych urządzeń ustawiasz w zakładce {hosts} - stąd zniknął, "
-                   "żeby nie było dwóch miejsc na to samo.",
+    hosts_hint = _("Adresy urządzeń (np. {storage}) ustawiasz w zakładce {hosts} - stąd zniknęły, żeby "
+                   "nie było dwóch miejsc na to samo.", **names.kw(),
                    hosts='<a href="/hosts">' + _("Hosty") + '</a>')
     body = f"""
       <div class="card">
@@ -2066,9 +2125,8 @@ def alerts_page(sess, cfg, rows, flash: str = "", error: str = "", alerts: int =
           </div>
           <details class="email-box full">
             <summary>{_("E-mail (opcjonalnie)")}</summary>
-            <p class="muted">{_("Dodatkowy kanał obok ntfy albo webhooka. Wysyła przez zwykłą skrzynkę "
-                                "(SMTP z logowaniem) - najlepiej osobne konto i hasło do aplikacji, bo "
-                                "hasło leży na Pi.")}</p>
+            <p class="muted">{_("Dodatkowy kanał obok ntfy albo webhooka. Wysyła przez zwykłą skrzynkę (SMTP z "
+                                "logowaniem) - najlepiej osobne konto i hasło do aplikacji, bo hasło leży na serwerze.")}</p>
             <div class="sub-row">
               <label class="check full"><input type="checkbox" name="alerts_email"
                 value="1"{' checked' if cfg.get('alerts_email') == '1' else ''}> {_("Wysyłaj alerty także e-mailem")}</label>
@@ -2138,7 +2196,8 @@ def _kind_help(kind: str) -> str:
         "full": _("Wszystko, razem z kluczem serwera. Po awarii odtwarzaj najnowszą taką."),
         "nokey": _("Pełna, ale bez klucza serwera (helper wtedy nie odpowiadał) - rzadkie."),
         "snapshot": _("Zapisana sama tuż przed odtworzeniem - do cofnięcia pomyłki."),
-        "found": _("Leżała na NAS albo na Pi, panel jej nie robił (np. sprzed reinstalacji)."),
+        "found": _("Leżała w miejscu {storage} albo {server}, panel jej nie robił (np. sprzed "
+                   "reinstalacji).", **names.kw()),
         "basic": _("Bez klucza serwera, haseł i historii - zrobiona bez hasła kopii."),
         "failed": "",
     }[kind]
@@ -2149,8 +2208,8 @@ def _state(item: dict) -> tuple:
     if not item["ok"]:
         return "dead", _("nieudana"), i18n.helper(item["detail"])
     if item["gone"] and not item["where"]:
-        why = (_("Przy ostatnim odświeżeniu listy pliku nie było na NAS.") if "smb" in item["gone"]
-               else _("Plik usunęło sprzątanie „Na Pi trzymaj ostatnie”."))
+        why = (_("Przy ostatnim odświeżeniu listy pliku nie było w miejscu {storage}.", **names.kw()) if "smb" in item["gone"]
+               else _("Plik usunęło sprzątanie „Trzymaj ostatnie” ({server}).", **names.kw()))
         return "dead", _("brak pliku"), why
     if item["verified_at"] and not item["verify_ok"]:
         return "dead", _("uszkodzona"), i18n.audit_detail(item["verify_detail"])
@@ -2180,14 +2239,15 @@ def backup_legend() -> str:
     return (f'<details class="more legend"><summary>{e(_("Co znaczą oznaczenia?"))}</summary>'
             f'<div class="legend-cols"><div><h4>{e(_("Rodzaj"))}</h4><ul>{kinds}</ul></div>'
             f'<div><h4>{e(_("Stan"))}</h4><ul>{states}</ul></div></div>'
-            f'<p class="muted">{e(_("„NAS + Pi” - plik jest w obu miejscach; odtworzenie bierze go z Pi."))}</p>'
+            f'<p class="muted">{e(_("„{storage} + {server}” - plik jest w obu miejscach; odtworzenie bierze go z: "
+                                    "{server}.", **names.kw()))}</p>'
             f'</details>')
 
 
 def _where_label(where: set) -> str:
     if where == {"smb", "local"}:
-        return _("NAS + Pi")
-    return _("NAS") if "smb" in where else _("Pi")
+        return names.storage() + " + " + names.server()
+    return names.storage() if "smb" in where else names.server()
 
 
 def backup_items(rows, files, scan: dict | None = None, exists=os.path.exists) -> list:
@@ -2269,8 +2329,8 @@ def backup_row(item: dict) -> str:
     if item["where"]:
         where = _where_label(item["where"])
     else:
-        where = _("NAS") if item["smb"] else _("Pi")
-    where_title = (_("Plik jest na NAS i na Pi; odtworzenie bierze go z Pi.")
+        where = names.storage() if item["smb"] else names.server()
+    where_title = (_("Plik jest w obu miejscach: {storage} i {server}. Odtworzenie bierze go z: {server}.", **names.kw())
                    if item["where"] == {"smb", "local"} else "")
     size = f'{item["bytes"] / 1024:.1f} KiB' if item["bytes"] else ""
     file_title = item["name"] + (f" · {size}" if size else "")
@@ -2311,8 +2371,8 @@ def backup_kind_box(cfg: dict) -> str:
                  have=len(secret), n=export.WEAK_PASSPHRASE)
     else:
         css, title = "ok", _("PEŁNA, zaszyfrowana")
-        text = _("Wszystko, razem z kluczem serwera - odtworzysz z niej całe Pi. Hasło kopii "
-                 "trzymaj w menedżerze haseł.")
+        text = _("Wszystko, razem z kluczem serwera - odtworzysz z niej cały serwer ({server}). Hasło "
+                 "kopii trzymaj w menedżerze haseł.", **names.kw())
     return _status_line(css, _("Rodzaj kopii") + ": " + title, text, "kind-box")
 
 
@@ -2323,7 +2383,8 @@ def _status_line(css: str, title: str, text: str = "", extra: str = "") -> str:
 
 
 def target_label(target: str) -> str:
-    return {"smb": _("tylko NAS"), "both": _("NAS i Pi")}.get(target, _("tylko Pi"))
+    labels = {"smb": _("tylko {storage}", **names.kw()), "both": _("{storage} i {server}", **names.kw())}
+    return labels.get(target, _("tylko {server}", **names.kw()))
 
 
 def backup_status(cfg: dict, rows) -> str:
@@ -2350,7 +2411,7 @@ def backup_status(cfg: dict, rows) -> str:
                               text)
     else:
         item = backup_items([last], [], None, exists=lambda _path: True)[0]
-        place = _("NAS") if item["smb"] else _("Pi")
+        place = names.storage() if item["smb"] else names.server()
         title = _("Ostatnia kopia: {when} → {where} ({ago})", when=_stamp(last["ts"]), where=place,
                   ago=_handshake(last["ts"])[0])
         stale = cfg.get("backup_enabled") == "1" and time.time() - last["ts"] > 36 * 3600
@@ -2358,8 +2419,8 @@ def backup_status(cfg: dict, rows) -> str:
         css = "dead" if bad else ("warn" if stale else "ok")
         text = _verify_text(item)
         if stale:
-            text += ". " + _("Kopia automatyczna nie powstała od ponad doby - sprawdź, czy Pi "
-                             "działało o tej porze.")
+            text += ". " + _("Kopia automatyczna nie powstała od ponad doby - sprawdź, czy serwer ({server}) "
+                             "działał o tej porze.", **names.kw())
         recent = _status_line(css, title, text)
     return f'<div class="status-list">{backup_kind_box(cfg)}{auto}{recent}</div>'
 
@@ -2385,9 +2446,8 @@ def restore_dialog(cfg: dict, csrf: str) -> str:
             "HTTPS - dotychczasowe pliki osób będą działać."))}</p>
     <p class="key-note" data-for="found">{e(_("Panel nie wie, czy ta kopia jest pełna - po "
             "odtworzeniu powie, czy wrócił klucz serwera i czy pliki osób zadziałają."))}</p>
-    <p class="key-note warn" data-for="other">{e(_("Ta kopia nie ma klucza serwera. Jeśli to Pi ma "
-            "inny klucz (np. nowy system), każda osoba będzie potrzebować nowego pliku - panel "
-            "powie to zaraz po odtworzeniu."))}</p>
+    <p class="key-note warn" data-for="other">{e(_("Ta kopia nie ma klucza serwera. Jeśli ten serwer ma inny klucz (np. nowy system), "
+                                                   "każda osoba będzie potrzebować nowego pliku - panel powie to zaraz po odtworzeniu."))}</p>
     <label class="restore-secret">{e(_("Hasło kopii"))}
       <input type="password" name="passphrase" autocomplete="off" placeholder="{e(hint)}"></label>
     <label class="check"><input type="checkbox" name="with_users" value="1">
@@ -2413,8 +2473,8 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
     lines = [backup_row(item) for item in items]
     if not lines:
         lines.append('<tr><td colspan="5" class="muted">' + e(_(
-            "Panel nie zna jeszcze żadnej kopii. Na nowym systemie wpisz dane NAS w "
-            "ustawieniach na dole strony i kliknij „Odśwież listę z NAS”.")) + '</td></tr>')
+            "Panel nie zna jeszcze żadnej kopii. Na nowym systemie uzupełnij w ustawieniach na "
+            "dole strony sekcję {storage} i kliknij „Odśwież listę”.", **names.kw())) + '</td></tr>')
     total = len(rows) if total is None else total
     more = ""
     if total > len(rows):
@@ -2423,13 +2483,13 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
 
     # "Zrob kopie teraz": trzy miejsca do wyboru, kazde robi dokladnie to, co mowi
     plain_ask = "" if secret else ask(
-        _("Wysłać kopię na NAS bez szyfrowania?"),
+        _("Wysłać kopię bez szyfrowania? Cel: {storage}", **names.kw()),
         _("Kopia zawiera klucze PSK wszystkich peerów. Bez hasła kopii trafi na udział jawnym "
           "tekstem - ustaw hasło kopii w ustawieniach kopii, żeby ją zaszyfrować."),
         _("Wyślij bez szyfrowania"))
     smb_set = bool((cfg.get("smb_host") or "").strip() and (cfg.get("smb_share") or "").strip())
-    smb_note = (_("Tylko na NAS - na Pi nic nie zostaje.") if smb_set
-                else _("Najpierw wpisz dane NAS w ustawieniach na dole strony."))
+    smb_note = (_("Kopia trafia tylko tutaj. Na urządzeniu {server} nic nie zostaje.", **names.kw()) if smb_set
+                else _("Najpierw uzupełnij sekcję {storage} w ustawieniach na dole strony.", **names.kw()))
     file_note = (_("Plik pobierze przeglądarka - pełna kopia, zaszyfrowana hasłem kopii. Panel go nie przechowuje.")
                  if secret else
                  _("Plik pobierze przeglądarka - kopia podstawowa, jawna. Panel go nie przechowuje."))
@@ -2437,24 +2497,24 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
     # lista: jedna akcja NAS (odswiezenie listy) i akcje na zaznaczonych
     smb_ready = bool((cfg.get("smb_host") or "").strip() and (cfg.get("smb_share") or "").strip())
     if scan:
-        scan_line = _("NAS sprawdzone {when}.", when=_stamp(scan["ts"]))
+        scan_line = _("{storage}: sprawdzone {when}.", **names.kw(), when=_stamp(scan["ts"]))
     elif smb_ready:
-        scan_line = _("Kopie z NAS dojdą do listy po kliknięciu „Odśwież listę z NAS”.")
+        scan_line = _("Kopie z miejsca {storage} dojdą do listy po kliknięciu „Odśwież listę”.", **names.kw())
     else:
         scan_line = ""
-    scan_title = _("Panel pyta NAS tylko po kliknięciu - nigdy w tle.")
-    scan_button = (f'<button title="{e(scan_title)}">{e(_("Odśwież listę z NAS"))}</button>'
+    scan_title = _("Panel pyta urządzenie {storage} tylko po kliknięciu - nigdy w tle.", **names.kw())
+    scan_button = (f'<button title="{e(scan_title)}">{e(_("Odśwież listę · {storage}", **names.kw()))}</button>'
                    if smb_ready else
-                   f'<button disabled title="{e(_("najpierw wpisz dane NAS w ustawieniach"))}">'
-                   f'{e(_("Odśwież listę z NAS"))}</button>')
-    text_local = _("Zaznaczone kopie zostaną usunięte z Pi razem z plikami .sha256. Tego nie da "
-                   "się cofnąć - zostaw przynajmniej jedną zgodną kopię.")
-    text_smb = _("Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z Pi, a kopie na "
-                 "NAS także z NAS. Tego nie da się cofnąć - zostaw przynajmniej jedną "
-                 "zgodną kopię.")
+                   f'<button disabled title="{e(_("najpierw uzupełnij sekcję {storage} w ustawieniach", **names.kw()))}">'
+                   f'{e(_("Odśwież listę · {storage}", **names.kw()))}</button>')
+    text_local = _("Zaznaczone kopie zostaną usunięte z miejsca {server} razem z plikami .sha256. Tego "
+                   "nie da się cofnąć - zostaw przynajmniej jedną zgodną kopię.", **names.kw())
+    text_smb = _("Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z miejsca {server}, a "
+                 "kopie z miejsca {storage} także stamtąd. Tego nie da się cofnąć - zostaw przynajmniej "
+                 "jedną zgodną kopię.", **names.kw())
     delete_ask = ask(_("Usunąć zaznaczone kopie?"), text_local, _("Usuń kopie")) + (
         f' data-text-local="{e(text_local)}" data-text-smb="{e(text_smb)}"'
-        f' data-detail="{e(_("Zaznaczone: {n} (na Pi: {local}, na NAS: {smb}).", n="{n}", local="{local}", smb="{smb}"))}"')
+        f' data-detail="{e(_("Zaznaczone: {n} ({server}: {local}, {storage}: {smb}).", **names.kw(), n="{n}", local="{local}", smb="{smb}"))}"')
     failed_button = (f'<button type="button" onclick="wgPickFailed()">{e(_("Zaznacz nieudane"))}</button>'
                      if any(not item["ok"] for item in items) else "")
     heads = ('<th class="pick"><input type="checkbox" data-pick-all aria-label="' +
@@ -2468,16 +2528,16 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
         <div class="dest-grid">
           <form method="post" action="/backups/run"{plain_ask}>
             {csrf}<input type="hidden" name="target" value="smb">
-            <button class="dest"{'' if smb_set else ' disabled'}><strong>{e(_("Na NAS"))}</strong>
+            <button class="dest"{'' if smb_set else ' disabled'}><strong>{e(names.storage())}</strong>
               <span>{e(smb_note)}</span></button>
           </form>
           <form method="post" action="/backups/run">
             {csrf}<input type="hidden" name="target" value="local">
-            <button class="dest"><strong>{e(_("Na Pi"))}</strong>
-              <span>{e(_("Tylko na tym Pi. Szybko, ale nie chroni przed awarią karty."))}</span></button>
+            <button class="dest"><strong>{e(names.server())}</strong>
+              <span>{e(_("Kopia zostaje tylko tutaj. Szybko, ale nie chroni przed awarią serwera."))}</span></button>
           </form>
           <form method="post" action="/backups/export">
-            {csrf}<button class="dest"><strong>{e(_("Na ten komputer"))}</strong>
+            {csrf}<button class="dest"><strong>{e(_("Ten komputer"))}</strong>
               <span>{e(file_note)}</span></button>
           </form>
         </div>
@@ -2530,9 +2590,9 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
                 <label>{e(_("O godzinie"))}<input name="backup_time"
                        value="{e(cfg.get('backup_time', '03:30'))}" placeholder="03:30"></label>
                 <label>{e(_("Dokąd"))}<select name="backup_target">
-                  <option value="smb"{' selected' if target == 'smb' else ''}>{e(_("tylko NAS"))}</option>
-                  <option value="local"{' selected' if target not in ('smb', 'both') else ''}>{e(_("tylko Pi"))}</option>
-                  <option value="both"{' selected' if target == 'both' else ''}>{e(_("NAS i Pi (dwie kopie)"))}</option>
+                  <option value="smb"{' selected' if target == 'smb' else ''}>{e(_("tylko {storage}", **names.kw()))}</option>
+                  <option value="local"{' selected' if target not in ('smb', 'both') else ''}>{e(_("tylko {server}", **names.kw()))}</option>
+                  <option value="both"{' selected' if target == 'both' else ''}>{e(_("{storage} i {server} (dwie kopie)", **names.kw()))}</option>
                 </select></label>
               </div>
             </div>
@@ -2550,8 +2610,18 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
           </section>
           <section class="set-row">
             <div class="set-info">
-              <h3>{e(_("NAS"))}</h3>
-              <p class="muted">{e(_("Udział SMB na kopie. Panel łączy się z nim tylko przy kopii i na przycisk - nigdy w tle, więc NAS może spać."))}</p>
+              <div class="named"><h3 data-name-of="name_storage">{e(names.storage())}</h3>
+                <button type="button" class="rename-btn" onclick="wgRename('name_storage')">{e(_("Zmień nazwę"))}</button>
+                <span class="rename-actions" hidden>
+                  <button type="button" class="rename-save" onclick="wgRenameSave('name_storage')">{e(_("Zapisz"))}</button>
+                  <button type="button" class="rename-cancel" onclick="wgRenameCancel('name_storage')">{e(_("Anuluj"))}</button>
+                </span></div>
+              <label class="rename" id="rename-name_storage" hidden>{e(_("Nazwa"))}
+                <input name="name_storage" value="{e(names.storage())}" maxlength="{names.MAX_LENGTH}" form="rename-none"
+                       data-default="{e(names.DEFAULTS['name_storage'])}" data-saved="{e(names.storage())}">
+                <small class="muted">{e(_("Etykieta w całym panelu, w alertach i w kopii. Enter zapisuje, Esc anuluje."))}</small></label>
+              <p class="muted">{e(_("Udział SMB na kopie. Panel łączy się z nim tylko przy kopii i na przycisk - nigdy w "
+                                    "tle, więc to urządzenie może spać."))}</p>
             </div>
             <div class="set-fields">
               <div class="pair trio">
@@ -2572,14 +2642,25 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
           </section>
           <section class="set-row">
             <div class="set-info">
-              <h3>{e(_("Na Pi"))}</h3>
-              <p class="muted">{e(_("Tu leżą kopie robione na Pi. Kopia „tylko NAS” powstaje tu na chwilę i znika zaraz po wysłaniu. Na Pi panel trzyma najwyżej tyle ostatnich kopii, ile wpiszesz; kopii na NAS to nie dotyczy."))}</p>
+              <div class="named"><h3 data-name-of="name_server">{e(names.server())}</h3>
+                <button type="button" class="rename-btn" onclick="wgRename('name_server')">{e(_("Zmień nazwę"))}</button>
+                <span class="rename-actions" hidden>
+                  <button type="button" class="rename-save" onclick="wgRenameSave('name_server')">{e(_("Zapisz"))}</button>
+                  <button type="button" class="rename-cancel" onclick="wgRenameCancel('name_server')">{e(_("Anuluj"))}</button>
+                </span></div>
+              <label class="rename" id="rename-name_server" hidden>{e(_("Nazwa"))}
+                <input name="name_server" value="{e(names.server())}" maxlength="{names.MAX_LENGTH}" form="rename-none"
+                       data-default="{e(names.DEFAULTS['name_server'])}" data-saved="{e(names.server())}">
+                <small class="muted">{e(_("Etykieta w całym panelu, w alertach i w kopii. Enter zapisuje, Esc anuluje."))}</small></label>
+              <p class="muted">{e(_("Serwer, na którym działa panel. Tu leżą jego kopie; kopia wysyłana do miejsca "
+                                    "{storage} powstaje tu na chwilę i znika zaraz po wysłaniu. Panel trzyma tu najwyżej "
+                                    "tyle ostatnich kopii, ile wpiszesz.", **names.kw()))}</p>
             </div>
             <div class="set-fields">
               <div class="pair">
-                <label>{e(_("Katalog kopii na Pi"))}<input name="backup_dir"
+                <label>{e(_("Katalog kopii"))}<input name="backup_dir"
                        value="{e(cfg.get('backup_dir', ''))}" placeholder="{e(export.STAGING)}"></label>
-                <label>{e(_("Na Pi trzymaj ostatnie"))}<input name="backup_keep" inputmode="numeric"
+                <label>{e(_("Trzymaj ostatnie"))}<input name="backup_keep" inputmode="numeric"
                        value="{e(cfg.get('backup_keep', '14'))}"></label>
               </div>
             </div>
@@ -2668,8 +2749,9 @@ def traffic_chart(series: list[dict], title: str) -> str:
         chunk = [by_hour.get(ts, {"ts": ts, "rx": 0, "tx": 0, "future": ts > series[-1]["ts"]})
                  for ts in hours]
         slots.extend(chunk)
+        nodata = all(p.get("nodata") or p.get("future") for p in chunk)
         days.append((back == 0, f'{_weekday(midnight)} {time.localtime(midnight).tm_mday:02d}',
-                     sum(p["tx"] for p in chunk), sum(p["rx"] for p in chunk)))
+                     sum(p["tx"] for p in chunk), sum(p["rx"] for p in chunk), nodata))
     count = len(slots)
     slot = width / count
     peak_down = _nice_ceiling(max(p["tx"] for p in slots))
@@ -2693,6 +2775,10 @@ def traffic_chart(series: list[dict], title: str) -> str:
             shapes.append(f'<line x1="{x0:.2f}" x2="{x0:.2f}" y1="0" y2="{height}" class="sep"/>')
     shapes.append(f'<line x1="{now_x:.2f}" x2="{now_x:.2f}" y1="0" y2="{height}" class="now"/>')
 
+    # czas sprzed poczatku historii: lekko przygaszony - tam nie "nie bylo ruchu", tylko nie bylo danych
+    first_data = next((i for i, p in enumerate(slots) if not p.get("nodata")), len(slots))
+    if first_data:
+        shapes.append(f'<rect x="0" y="0" width="{first_data * slot:.2f}" height="{height}" class="nodata"/>')
     for frac in (0.5, 1.0):
         y = mid - frac * (mid - 4)
         shapes.append(f'<line x1="0" x2="{width}" y1="{y:.1f}" y2="{y:.1f}" class="grid"/>')
@@ -2722,11 +2808,18 @@ def traffic_chart(series: list[dict], title: str) -> str:
 
     axis = (axis_label(peak_down, 4) + axis_label(peak_down / 2, mid - (mid - 4) / 2)
             + axis_label(0, mid))
-    day_cells = "".join(
-        f'<div class="day{" today" if today else ""}"><b>{e(label)}</b>'
-        f'<span class="v down">↓ {_value_unit(down)}</span>'
-        f'<span class="v up">↑ {_value_unit(up)}</span></div>'
-        for today, label, down, up in days)
+    def day_cell(today: bool, label: str, down: float, up: float, nodata: bool) -> str:
+        css = "day" + (" today" if today else "")
+        if nodata:      # panel jeszcze wtedy nie zbieral probek
+            return (f'<div class="{css} empty" title="{e(_("Panel nie zbierał jeszcze wtedy danych."))}">'
+                    f'<b>{e(label)}</b><span class="none">{e(_("brak danych"))}</span></div>')
+        if not down and not up:
+            return f'<div class="{css} empty"><b>{e(label)}</b><span class="none">{e(_("brak ruchu"))}</span></div>'
+        return (f'<div class="{css}"><b>{e(label)}</b>'
+                f'<span class="v down">↓ {_value_unit(down)}</span>'
+                f'<span class="v up">↑ {_value_unit(up)}</span></div>')
+
+    day_cells = "".join(day_cell(*day) for day in days)
     total_down = sum(day[2] for day in days)
     total_up = sum(day[3] for day in days)
     return f"""
@@ -2877,13 +2970,13 @@ def integrity_page(sess, findings, checked_at: int, has_baseline: bool, alerts: 
 def disk_page(sess, rows, diff_parts, flash: str = "", alerts: int = 0) -> str:
     """Co jest w panelu, a co w konfiguracji dzialajacej na Pi."""
     # "zgodne" / "tylko na dysku" / "tylko w panelu" to klucze z app.py - tlumaczymy przy wyswietlaniu
-    names = {"zgodne": _("zgodne"), "tylko na dysku": _("tylko na dysku"),
+    where_labels = {"zgodne": _("zgodne"), "tylko na dysku": _("tylko na dysku"),
              "tylko w panelu": _("tylko w panelu")}
     order = {"tylko na dysku": 0, "tylko w panelu": 1}
     rows = sorted(rows, key=lambda r: (order.get(r["where"], 2), r["ip"]))
     items = []
     for row in rows:
-        label = e(names.get(row["where"], row["where"]))
+        label = e(where_labels.get(row["where"], row["where"]))
         if row["where"] == "zgodne":
             mark = f'<span class="badge ok">{label}</span>'
             action = '<span class="muted">' + _("nic do zrobienia") + '</span>'
@@ -2919,8 +3012,8 @@ def disk_page(sess, rows, diff_parts, flash: str = "", alerts: int = 0) -> str:
       <nav class="crumbs"><a class="button" href="/">← {_("Lista peerów")}</a></nav>
       <div class="card">
         <h1>{_("Porównanie z konfiguracją na dysku")}</h1>
-        <p class="muted">{_("Po lewej to, co panel by zapisał, po prawej to, co działa teraz na Pi. "
-                            "Panel jest źródłem prawdy: przy zastosowaniu nadpisze plik swoją wersją.")}</p>
+        <p class="muted">{_("Po lewej to, co panel by zapisał, po prawej to, co działa teraz na serwerze. Panel "
+                            "jest źródłem prawdy: przy zastosowaniu nadpisze plik swoją wersją.")}</p>
         {files}
         <form method="post" action="/disk/pull">
           {_csrf(sess)}

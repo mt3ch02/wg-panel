@@ -57,6 +57,11 @@ def hourly(conn: sqlite3.Connection, pubkey: str | None = None, days: int = 7,
             "SELECT pubkey, ts, rx, tx FROM traffic WHERE ts >= ? ORDER BY pubkey, ts",
             (start - HOUR,))
 
+    # poczatek historii: godziny sprzed pierwszej probki to "brak danych", a nie zero ruchu
+    first = conn.execute("SELECT MIN(ts) FROM traffic" + (" WHERE pubkey = ?" if pubkey else ""),
+                         (pubkey,) if pubkey else ()).fetchone()[0]
+    first = moment if first is None else first
+
     previous_key = None
     prev_rx = prev_tx = 0
     for key, ts, rx, tx in rows:
@@ -70,7 +75,8 @@ def hourly(conn: sqlite3.Connection, pubkey: str | None = None, days: int = 7,
         if bucket in buckets:
             buckets[bucket][0] += d_rx
             buckets[bucket][1] += d_tx
-    return [{"ts": ts, "rx": v[0], "tx": v[1]} for ts, v in sorted(buckets.items())]
+    return [{"ts": ts, "rx": v[0], "tx": v[1], "nodata": ts + HOUR <= first}
+            for ts, v in sorted(buckets.items())]
 
 
 def totals(series: list[dict]) -> tuple[int, int]:

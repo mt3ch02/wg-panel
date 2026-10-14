@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import db, helperclient, notify
+from . import db, helperclient, names, notify
 
 FAILS_BEFORE_ALERT = 2
 MIN_FREE_MB = 500
@@ -97,7 +97,7 @@ def checks(cfg: dict, sysroot: str = "/", port: str = "8080") -> dict:
     if temp is not None:
         celsius = int(temp) / 1000
         out["temp"] = (celsius < HOT_CELSIUS,
-                       f"Raspberry Pi się przegrzewa: {celsius:.0f}°C. Sprawdź chłodzenie.")
+                       f"{names.server(cfg)} się przegrzewa: {celsius:.0f}°C. Sprawdź chłodzenie.")
     try:
         stat = os.statvfs(os.path.dirname(os.environ.get("WGPANEL_DB", "/var/lib/wg-panel/panel.db")))
         free_mb = stat.f_bavail * stat.f_frsize / 1048576
@@ -113,7 +113,7 @@ def checks(cfg: dict, sysroot: str = "/", port: str = "8080") -> dict:
 
 
 LABELS = {"panel": "panel", "helper": "helper", "wg": "interfejs WireGuard",
-          "temp": "temperatura Pi", "disk": "miejsce na karcie", "tls": "certyfikat HTTPS"}
+          "temp": "temperatura ({server})", "disk": "miejsce na dysku", "tls": "certyfikat HTTPS"}
 
 
 def undervoltage(sysroot: str) -> bool | None:
@@ -142,7 +142,7 @@ def run(conn: sqlite3.Connection, sysroot: str = "/", port: str | None = None,
     now = int(time.time())
     for name, (ok, problem) in checks(cfg, sysroot, port).items():
         entry = memory.setdefault(name, {"fails": 0, "alerted": False, "since": 0})
-        label = LABELS.get(name, name)
+        label = LABELS.get(name, name).format(server=names.server(cfg))
         if ok:
             if entry["alerted"]:
                 minutes = max(1, (now - entry["since"]) // 60)
@@ -163,8 +163,8 @@ def run(conn: sqlite3.Connection, sysroot: str = "/", port: str | None = None,
     # napiecie: raz na uruchomienie Pi - to zdarzenie, a nie stan, ktory "wraca"
     boot = _read(os.path.join(sysroot, "proc/sys/kernel/random/boot_id")) or ""
     if undervoltage(sysroot) and state.get("undervoltage_boot") != boot:
-        notify.raise_alert(conn, "watchdog_power", "zasilanie Pi",
-                           "Raspberry Pi zgłosiło zbyt niskie napięcie zasilania. To częsta "
+        notify.raise_alert(conn, "watchdog_power", f"zasilanie ({names.server(cfg)})",
+                           f"{names.server(cfg)}: zbyt niskie napięcie zasilania. To częsta "
                            "przyczyna uszkodzenia karty SD - użyj mocniejszego zasilacza.",
                            severity="alarm")
         state["undervoltage_boot"] = boot

@@ -70,6 +70,7 @@ AUDIT_ACTIONS = {
     "apply.orphaned": "zmiana nieznana helperowi", "backup.export": "pobrano kopię",
     "backup.failed": "kopia nieudana", "backup.ok": "kopia zapasowa", "backup.delete": "usunięto kopie",
     "backup.restore": "odtworzono kopię", "backup.settings": "ustawienia kopii",
+    "backup.name": "nazwa urządzenia",
     "backup.snapshot": "migawka przed odtworzeniem", "backup.verify": "weryfikacja kopii",
     "changes.discard": "odrzucono zmiany", "config.pull": "przejęto peerów z dysku",
     "delivery.used": "użyto linku jednorazowego", "history.prune": "czyszczenie historii",
@@ -96,14 +97,14 @@ AUDIT_ACTORS = {"harmonogram": "harmonogram", "anonim": "anonim"}
 LOGGED_TEMPLATES = [
     "brak potwierdzenia na czas", "helper nie zna oczekującej zmiany",
     "zaszyfrowana", "bez szyfrowania", "nieudany", "pełna kopia, zaszyfrowana",
-    "znaleziona na NAS", "znaleziona na Pi", "kopia stanu przed aktualizacją",
+    "znaleziona na NAS", "znaleziona na Pi", "znaleziona: {where}", "kopia stanu przed aktualizacją",
     "pełna kopia bez klucza serwera (helper nie odpowiadał), zaszyfrowana", "nie ma takiej kopii", "suma zgodna",
     "przydzielono {n} adresów", "{n} różnic, ale panel ma niezastosowane zmiany",
     "zmiana okien dostępu: {names}",
     "{n} odciętych peerów -> zawieszeni ze skasowanym kluczem",
     "alias $NAS -> nas w {n} miejscach", "dodano host nas z dawnego ustawienia", "dodano {n}",
     "{label}: {summary}; wcześniejszy stan w {safety}",
-    "{n} (karta: {local}, NAS: {remote})",
+    "{n} (karta: {local}, NAS: {remote})", "{n} ({server}: {local}, {storage}: {remote})",
     "Nie ma kopii do sprawdzenia.",
     "{bad} z {total} kopii NIE przeszło weryfikacji - szczegóły w tabeli.",
     "Sprawdzono {n} kopii - sumy kontrolne zgodne.",
@@ -239,6 +240,21 @@ HELPER_PATTERNS = [
      "kopia SMB: {name} leży pod innym adresem niż w ustawieniach - usuń ją ręcznie na NAS-ie"),
     (r"brak dostepu do katalogu kopii (?P<path>\S+) - zainstaluj panel ponownie",
      "brak dostępu do katalogu kopii {path} - zainstaluj panel ponownie"),
+    (r"kopia SMB \((?P<storage>.+?)\): brak adresu albo udzialu",
+     "kopia SMB ({storage}): brak adresu albo udziału - uzupełnij je w ustawieniach kopii"),
+    (r"kopia SMB \((?P<storage>.+?)\): brak uzytkownika albo hasla",
+     "kopia SMB ({storage}): brak użytkownika albo hasła - uzupełnij je w ustawieniach kopii"),
+    (r"(?P<storage>.+?): odrzucony login albo hasło \(użytkownik (?P<user>\S+)\) - sprawdź je; "
+     r"w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres serwera \((?P<server>.+?)\) "
+     r"zablokowany \(np. automatyczna blokada adresów\)",
+     "{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, "
+     "czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)"),
+    (r"(?P<storage>.+?): nie ma udziału (?P<share>\S+)", "{storage}: nie ma udziału {share}"),
+    (r"(?P<storage>.+?): brak odpowiedzi pod adresem (?P<host>\S+) - sprawdź adres i czy "
+     r"na NAS-ie jest włączone SMB",
+     "{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB"),
+    (r"suma kontrolna z pliku \.sha256 \((?P<storage>.+?)\) sie nie zgadza - nie odtwarzam",
+     "suma kontrolna z pliku .sha256 ({storage}) się nie zgadza - nie odtwarzam"),
     (r"kopia SMB: brak adresu albo udzialu NAS",
      "kopia SMB: brak adresu albo udziału NAS - uzupełnij je w ustawieniach kopii"),
     (r"kopia SMB: brak uzytkownika albo hasla NAS",
@@ -449,8 +465,6 @@ EN.update({
         'Secret',
     'Przejdź do logowania':
         'Go to sign-in',
-    'Panel działa po HTTPS. Certyfikat ważny do {date} - odnawia się sam na 30 dni przed końcem i po zmianie adresu Pi.':
-        "The panel runs over HTTPS. The certificate is valid until {date} - it renews itself 30 days before it expires and whenever the Pi's address changes.",
     'HTTPS włączone, ale certyfikatu jeszcze nie ma.':
         'HTTPS is on, but there is no certificate yet.',
     'Adresy w certyfikacie':
@@ -495,8 +509,6 @@ EN.update({
         'Download certificate',
     'Sprawdź, czy to ten sam certyfikat':
         "Check that it's the same certificate",
-    'Odcisk SHA-256 musi się zgadzać z tym, co wypisał instalator na Pi (albo polecenie {command}):':
-        'The SHA-256 fingerprint must match the one printed by the installer on the Pi (or by {command}):',
     'Ten urząd może poświadczać wyłącznie: {names}. Nawet gdyby ktoś wykradł jego klucz, nie podrobi nim żadnej innej strony.':
         "This authority can only vouch for: {names}. Even if someone stole its key, they couldn't fake any other website with it.",
     'Instalacja':
@@ -505,8 +517,6 @@ EN.update({
         'iPhone and iPad',
     'Windows (Chrome, Edge)':
         'Windows (Chrome, Edge)',
-    'Po instalacji otwieraj panel przez https:// - przez VPN pod adresem {address}, w domu pod adresem Pi w sieci lokalnej.':
-        "After installing, open the panel over https:// - through the VPN at {address}, at home at the Pi's local address.",
 })
 
 # --- lista peerow ---
@@ -567,8 +577,6 @@ EN.update({
         'active peers',
     'Konfiguracja zmieniona poza panelem':
         'Configuration changed outside the panel',
-    'Jeśli to nie Ty, ktoś ma dostęp do Raspberry Pi. Zobacz szczegóły i przywróć stan z panelu.':
-        "If it wasn't you, someone has access to the Raspberry Pi. See the details and restore the panel's state.",
     'Ruch w tunelu - ostatnie 7 dni':
         'Tunnel traffic - last 7 days',
     'Nazwa':
@@ -969,8 +977,6 @@ EN.update({
         'delete tier',
     'Opis':
         'Description',
-    'Porty na samym Pi':
-        'Ports on the Pi itself',
     '22 SSH, 3389 RDP, 8080 panel':
         '22 SSH, 3389 RDP, 8080 panel',
     'Zapisz':
@@ -991,8 +997,6 @@ EN.update({
         'VPN subnet',
     'Adres serwera w VPN':
         'Server address in the VPN',
-    'Adres Pi w LAN':
-        'Pi address in the LAN',
     'Interfejs WAN':
         'WAN interface',
     'Port nasłuchu':
@@ -1005,8 +1009,6 @@ EN.update({
         'WireGuard interface',
     'Nazwa łańcucha':
         'Chain name',
-    'Czas na potwierdzenie [s, 30-900]':
-        'Time to confirm [s, 30-900]',
     'MTU klienta':
         'Client MTU',
     'Port panelu':
@@ -1021,8 +1023,6 @@ EN.update({
         'Anomaly [MB]',
     'DDNS albo publiczny IP z portem':
         'DDNS or public IP with port',
-    'adres Pi w sieci domowej':
-        "the Pi's address in the home network",
     'trafia do plików z całym ruchem':
         'goes into full-tunnel files',
     'puste = domyślne':
@@ -1055,8 +1055,6 @@ EN.update({
         'Restart',
     'Po włączeniu każdy peer dostaje adres IPv6 odpowiadający IPv4 (10.0.0.4 → fd42:42:42::4), a reguły działają w obu rodzinach naraz - blokada LAN obejmuje też prefiks IPv6 sieci domowej. Peerom trzeba potem wydać nowe pliki konfiguracyjne.':
         "Once on, every peer gets an IPv6 address matching its IPv4 one (10.0.0.4 → fd42:42:42::4), and rules work in both families at once - the LAN block also covers the home network's IPv6 prefix. Peers then need new configuration files.",
-    'Adres NAS i innych urządzeń ustawiasz w zakładce {hosts} - stąd zniknął, żeby nie było dwóch miejsc na to samo.':
-        "You set the address of the NAS and other devices in the {hosts} tab - it was removed from here so there aren't two places for the same thing.",
     'Klucz publiczny serwera':
         'Server public key',
     'niedostępny':
@@ -1397,8 +1395,6 @@ EN.update({
         'What to do',
     'Porównanie z konfiguracją na dysku':
         'Comparison with the configuration on disk',
-    'Po lewej to, co panel by zapisał, po prawej to, co działa teraz na Pi. Panel jest źródłem prawdy: przy zastosowaniu nadpisze plik swoją wersją.':
-        'On the left, what the panel would write; on the right, what is running on the Pi right now. The panel is the source of truth: when applying, it overwrites the file with its own version.',
     '„Tylko na dysku” to osoby dopisane z pominięciem panelu - możesz je przejąć, żeby nimi zarządzać, albo zostawić, a znikną przy najbliższym zastosowaniu. „Tylko w panelu” trafi na dysk przy zastosowaniu.':
         "“Only on disk” are people added bypassing the panel - you can take them over to manage them, or leave them and they'll disappear at the next apply. “Only in the panel” goes to disk when applying.",
     'Podgląd i zastosowanie':
@@ -1741,8 +1737,6 @@ EN.update({
 EN.update({
     'E-mail (opcjonalnie)':
         'E-mail (optional)',
-    'Dodatkowy kanał obok ntfy albo webhooka. Wysyła przez zwykłą skrzynkę (SMTP z logowaniem) - najlepiej osobne konto i hasło do aplikacji, bo hasło leży na Pi.':
-        'An extra channel next to ntfy or the webhook. It sends through a regular mailbox (SMTP with sign-in) - ideally a separate account and an app password, because the password is stored on the Pi.',
     'Wysyłaj alerty także e-mailem':
         'Also send alerts by e-mail',
     'Serwer SMTP':
@@ -1811,8 +1805,6 @@ EN.update({
         'Proxy address: {item} is not an IP address or subnet.',
     'Adres proxy: {item} oznaczałby zaufanie do każdego - podaj adres serwera proxy.':
         "Proxy address: {item} would mean trusting everyone - enter the proxy server's address.",
-    'Pobierz certyfikat urzędu panelu ({link}) i skopiuj go na serwer proxy - proxy łączy się z Pi po HTTPS i sprawdza certyfikat panelu, więc odcinek do Pi też jest szyfrowany.':
-        "Download the panel's certificate authority ({link}) and copy it to the proxy server - the proxy connects to the Pi over HTTPS and checks the panel's certificate, so the hop to the Pi is encrypted too.",
     'Przy własnym certyfikacie zamiast {option} ustaw w proxy nazwę z certyfikatu ({server_name}).':
         'With your own certificate, instead of {option} set the name from the certificate in the proxy ({server_name}).',
     'Reverse proxy na innym serwerze (opcjonalnie)':
@@ -1823,14 +1815,10 @@ EN.update({
         'Proxy server address',
     'do bloku z Twoją domeną':
         'into the block with your domain',
-    'Uwaga: przez proxy stronę logowania zobaczy każdy, kto ma dostęp do proxy - także osoby z VPN, którym panel sam by jej nie pokazał. Włącz kod z aplikacji (TOTP) i w proxy ogranicz, kto może otworzyć panel. Zapora Pi musi wpuszczać serwer proxy na port panelu (instalator: {lan}).':
-        "Note: through the proxy, anyone who can reach the proxy will see the sign-in page - including VPN users the panel itself would not show it to. Turn on the authenticator code (TOTP) and restrict in the proxy who can open the panel. The Pi's firewall must let the proxy server reach the panel port (installer: {lan}).",
 })
 
 # --- kopia na NAS teraz ---
 EN.update({
-    'Wysłać kopię na NAS bez szyfrowania?':
-        'Send the backup to the NAS unencrypted?',
     'Wyślij bez szyfrowania':
         'Send unencrypted',
     'kopia SMB: brak użytkownika albo hasła NAS - uzupełnij je w ustawieniach kopii':
@@ -1841,8 +1829,6 @@ EN.update({
 
 # --- panel kopii - dwa przyciski ---
 EN.update({
-    'NAS':
-        'NAS',
     'kopia SMB: brak adresu albo udziału NAS - uzupełnij je w ustawieniach kopii':
         'SMB backup: NAS address or share missing - fill them in under Backup settings',
 })
@@ -1859,8 +1845,6 @@ EN.update({
         'Delete selected',
     'Nie zaznaczyłeś żadnej kopii.':
         "You didn't select any backup.",
-    'Usunięto kopie: {n} (plików na Pi: {local}, na NAS: {remote}).':
-        'Backups deleted: {n} (files on the Pi: {local}, on the NAS: {remote}).',
     'Nie usunięto: {problems}':
         'Not deleted: {problems}',
     'usunięto kopie':
@@ -1921,14 +1905,8 @@ EN.update({
         'full backup without the server key (the helper did not respond), encrypted',
     'Klucz serwera przywrócony z kopii - po zastosowaniu zmian wszyscy łączą się swoimi dotychczasowymi plikami.':
         'Server key restored from the backup - after applying changes everyone connects with their existing files.',
-    'Klucz serwera tego Pi jest taki sam jak w kopii - dotychczasowe pliki osób działają.':
-        "This Pi's server key matches the backup - everyone's existing files work.",
-    'Klucz serwera tego Pi jest INNY niż w kopii, a kopia go nie zawiera. Dotychczasowe pliki osób nie zadziałają - każdej osobie wydaj nowy plik (Rotacja kluczy na karcie osoby, potem Zastosuj zmiany).':
-        "This Pi's server key is DIFFERENT from the backup, and the backup doesn't contain it. Existing files won't work - give everyone a new file (Key rotation on the person's page, then Apply changes).",
     'Nie udało się przywrócić klucza serwera: {error}':
         "Couldn't restore the server key: {error}",
-    'Certyfikat HTTPS: powstał nowy urząd (inna nazwa albo sieć Pi niż w kopii) - zainstaluj nowy ca.crt na urządzeniach.':
-        "HTTPS certificate: a new authority was created (the Pi's name or network differs from the backup) - install the new ca.crt on your devices.",
     'Certyfikat HTTPS przywrócony - urządzenia nie potrzebują nowego ca.crt.':
         "HTTPS certificate restored - devices don't need a new ca.crt.",
 })
@@ -1989,33 +1967,21 @@ EN.update({
         "Added to the list: {n} (the panel didn't know them, e.g. from before a reinstall).",
     'Harmonogram': 'Schedule',
     'Hasło do tego pliku': 'Password for this file',
-    'Kopia automatyczna nie powstała od ponad doby - sprawdź, czy Pi działało o tej porze.':
-        'No automatic backup for more than a day - check that the Pi was running at that time.',
     'Kopia zawiera klucze PSK wszystkich peerów. Bez hasła kopii trafi na udział jawnym tekstem - ustaw hasło kopii w ustawieniach kopii, żeby ją zaszyfrować.':
         "The backup contains every peer's PSK. Without a backup password it lands on the share as plain text - set a backup password in the backup settings to encrypt it.",
     'Kopie automatyczne są wyłączone': 'Automatic backups are off',
     'Lista kopii': 'Backup list',
-    'Na Pi': 'On the Pi',
-    'Na Pi trzymaj ostatnie': 'Keep on the Pi (last)',
     'Odtworzyć kopię z {when}?': 'Restore the backup from {when}?',
     'Odtwórz zaznaczoną…': 'Restore selected…',
-    'Odśwież listę z NAS': 'Refresh list from NAS',
     'Ostatnia kopia NIEUDANA: {when}': 'Last backup FAILED: {when}',
     'Ostatnia kopia: jeszcze żadnej': 'Last backup: none yet',
     'Ostatnia kopia: {when} → {where} ({ago})': 'Last backup: {when} → {where} ({ago})',
     'Ostatnia udana: {when}.': 'Last successful: {when}.',
-    'Panel nie zna jeszcze żadnej kopii. Na nowym systemie wpisz dane NAS w ustawieniach na dole strony i kliknij „Odśwież listę z NAS”.':
-        "The panel doesn't know any backups yet. On a new system, enter the NAS details in the settings at the bottom of the page and click \"Refresh list from NAS\".",
     'Panel zastąpi osoby, tiery, reguły i ustawienia stanem z tej kopii. Obecny stan zapisze najpierw jako osobną kopię („sprzed odtworzenia”), więc zawsze da się wrócić.':
         'The panel will replace people, tiers, rules and settings with the state from this backup. It first saves the current state as a separate backup ("before restore"), so you can always go back.',
-    'Pi': 'Pi',
     'Pobierz na komputer z innym hasłem': 'Download to computer with a different password',
     'Pokaż wszystkie kopie ({n})': 'Show all backups ({n})',
     'Sprawdź zaznaczone': 'Check selected',
-    'NAS + Pi': 'NAS + Pi',
-    'NAS: {n} kopii.': 'NAS: {n} backups.',
-    'Ta kopia nie ma klucza serwera. Jeśli to Pi ma inny klucz (np. nowy system), każda osoba będzie potrzebować nowego pliku - panel powie to zaraz po odtworzeniu.':
-        "This backup has no server key. If this Pi has a different key (e.g. a new system), everyone will need a new file - the panel will tell you right after the restore.",
     'To pełna kopia: wraca też klucz serwera i certyfikat HTTPS - dotychczasowe pliki osób będą działać.':
         "This is a full backup: the server key and the HTTPS certificate come back too - everyone's existing files will keep working.",
     'Ustawienia kopii': 'Backup settings',
@@ -2023,15 +1989,9 @@ EN.update({
     'Zaznacz kopie na liście': 'Select backups in the list',
     'Zaznacz na nowym systemie: wraca Twoje dawne konto panelu (login, hasło, kod z aplikacji). Panel Cię wyloguje - zaloguj się starym hasłem. Bez zaznaczenia zostaje obecne konto.':
         'Tick on a new system: your old panel account comes back (login, password, app code). The panel will log you out - sign in with the old password. Unticked, the current account stays.',
-    'Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z Pi, a kopie na NAS także z NAS. Tego nie da się cofnąć - zostaw przynajmniej jedną zgodną kopię.':
-        'The selected backups will be deleted together with their .sha256 files - from the Pi, and backups on the NAS from the NAS too. This cannot be undone - keep at least one verified backup.',
-    'Zaznaczone kopie zostaną usunięte z Pi razem z plikami .sha256. Tego nie da się cofnąć - zostaw przynajmniej jedną zgodną kopię.':
-        'The selected backups will be deleted from the Pi together with their .sha256 files. This cannot be undone - keep at least one verified backup.',
     'Zaznaczone: {n}': 'Selected: {n}',
-    'Zaznaczone: {n} (na Pi: {local}, na NAS: {smb}).': 'Selected: {n} (on the Pi: {local}, on the NAS: {smb}).',
     'Zrób pierwszą przyciskiem u góry.': 'Make the first one with a button at the top.',
     'hasło, którym zaszyfrowano kopię': 'the password the backup was encrypted with',
-    'najpierw wpisz dane NAS w ustawieniach': 'enter the NAS details in the settings first',
     'nieudana': 'failed',
     'puste = kopie podstawowe, bez szyfrowania': 'empty = basic backups, unencrypted',
     'suma NIEZGODNA': 'checksum MISMATCH',
@@ -2046,35 +2006,18 @@ EN.update({
 EN.update({
     'Z hasłem każda kopia jest pełna (klucz serwera, hasła, historia) i zaszyfrowana. Bez hasła - podstawowa i jawna. Co najmniej {n} znaków; trzymaj je w menedżerze haseł - bez niego kopii nie otworzysz.':
         "With a password every backup is full (server key, passwords, history) and encrypted. Without one - basic and unencrypted. At least {n} characters; keep it in a password manager - without it the backup can't be opened.",
-    'Udział SMB na kopie. Panel łączy się z nim tylko przy kopii i na przycisk - nigdy w tle, więc NAS może spać.':
-        'The SMB share for backups. The panel connects only when backing up and on a button click - never in the background, so the NAS can sleep.',
     'Zapisz ustawienia': 'Save settings',
 })
 
 # kopia teraz: trzy miejsca do wyboru; kopie automatyczne: tylko NAS / tylko Pi / oba
 EN.update({
     'Zrób kopię teraz - gdzie?': 'Back up now - where?',
-    'Na NAS': 'To the NAS',
-    'Na Pi': 'To the Pi',
-    'Na ten komputer': 'To this computer',
-    'Tylko na NAS - na Pi nic nie zostaje.': 'Only on the NAS - nothing stays on the Pi.',
-    'Najpierw wpisz dane NAS w ustawieniach na dole strony.':
-        'Enter the NAS details in the settings at the bottom of the page first.',
-    'Tylko na tym Pi. Szybko, ale nie chroni przed awarią karty.':
-        "Only on this Pi. Quick, but it doesn't protect against a card failure.",
     'Plik pobierze przeglądarka - pełna kopia, zaszyfrowana hasłem kopii. Panel go nie przechowuje.':
         "The browser downloads the file - a full backup, encrypted with the backup password. The panel doesn't keep it.",
     'Plik pobierze przeglądarka - kopia podstawowa, jawna. Panel go nie przechowuje.':
         "The browser downloads the file - a basic, unencrypted backup. The panel doesn't keep it.",
-    'tylko NAS': 'NAS only',
-    'tylko Pi': 'Pi only',
-    'NAS i Pi': 'NAS and Pi',
-    'NAS i Pi (dwie kopie)': 'NAS and Pi (two copies)',
     'Kopia automatyczna raz na dobę, w miejsce wybrane obok. Przyciski „Zrób kopię teraz” na górze działają niezależnie od tego.':
         'One automatic backup a day, to the place chosen here. The "Back up now" buttons at the top work independently of this.',
-    'Tu leżą kopie robione na Pi. Kopia „tylko NAS” powstaje tu na chwilę i znika zaraz po wysłaniu. Na Pi panel trzyma najwyżej tyle ostatnich kopii, ile wpiszesz; kopii na NAS to nie dotyczy.':
-        'Backups made on the Pi are kept here. A "NAS only" backup is created here briefly and removed right after it is sent. On the Pi the panel keeps at most as many recent backups as you enter; backups on the NAS are not affected.',
-    'Katalog kopii na Pi': 'Backup folder on the Pi',
     'Nieznany cel kopii.': 'Unknown backup target.',
 })
 
@@ -2090,25 +2033,14 @@ EN.update({
     'Co znaczą oznaczenia?': 'What do the labels mean?',
     'Jeszcze nie sprawdzana.': 'Not checked yet.',
     'Kopia się nie zapisała; powód po najechaniu.': "The backup wasn't saved; hover for the reason.",
-    'Kopie z NAS dojdą do listy po kliknięciu „Odśwież listę z NAS”.':
-        'Backups on the NAS join the list after clicking "Refresh list from NAS".',
-    'Leżała na NAS albo na Pi, panel jej nie robił (np. sprzed reinstalacji).':
-        "It was on the NAS or the Pi; the panel didn't make it (e.g. from before a reinstall).",
     'Panel nie wie, czy ta kopia jest pełna - po odtworzeniu powie, czy wrócił klucz serwera i czy pliki osób zadziałają.':
         "The panel doesn't know whether this backup is full - after the restore it tells you whether the server key came back and whether everyone's files will work.",
-    'Panel pyta NAS tylko po kliknięciu - nigdy w tle.': 'The panel asks the NAS only when you click - never in the background.',
     'Pełna, ale bez klucza serwera (helper wtedy nie odpowiadał) - rzadkie.':
         "Full, but without the server key (the helper didn't respond at the time) - rare.",
-    'Plik jest na NAS i na Pi; odtworzenie bierze go z Pi.': 'The file is on the NAS and on the Pi; a restore takes it from the Pi.',
     'Plik ma tę samą sumę co przy zapisie.': 'The file has the same checksum as when it was saved.',
-    'Plik usunęło sprzątanie „Na Pi trzymaj ostatnie”.': 'The file was removed by the "Keep on the Pi" cleanup.',
     'Plik zmieniony albo uszkodzony - nie do odtworzenia.': "The file was changed or damaged - it can't be restored.",
     'Pliku już nie ma - wpis usuń.': 'The file is gone - delete the entry.',
-    'Przy ostatnim odświeżeniu listy pliku nie było na NAS.': 'At the last list refresh the file was not on the NAS.',
     'Suma SHA-256 zgodna ({when}).': 'SHA-256 checksum matches ({when}).',
-    'NAS sprawdzone {when}.': 'NAS checked {when}.',
-    'Wszystko, razem z kluczem serwera - odtworzysz z niej całe Pi. Hasło kopii trzymaj w menedżerze haseł.':
-        'Everything, including the server key - it restores the whole Pi. Keep the backup password in a password manager.',
     'Wszystko, razem z kluczem serwera. Po awarii odtwarzaj najnowszą taką.':
         'Everything, including the server key. After a failure, restore the newest one of these.',
     'Zapisana sama tuż przed odtworzeniem - do cofnięcia pomyłki.': 'Saved automatically just before a restore - to undo a mistake.',
@@ -2116,8 +2048,6 @@ EN.update({
     'brak pliku': 'file missing',
     'sprawdzona': 'checked',
     'uszkodzona': 'damaged',
-    '„NAS + Pi” - plik jest w obu miejscach; odtworzenie bierze go z Pi.':
-        '"NAS + Pi" - the file is in both places; a restore takes it from the Pi.',
 })
 
 
@@ -2168,4 +2098,144 @@ EN.update({
     'Liczba dni dziennika i alertów to liczba całkowita od 0 do {max} (0 = bez limitu).':
         'The number of days for the audit log and alerts is a whole number from 0 to {max} (0 = no limit).',
     'Zwiń': 'Collapse',
+})
+
+# --- wlasne nazwy urzadzen (panel/names.py) ---
+EN.update({
+    'Panel działa po HTTPS. Certyfikat ważny do {date} - odnawia się sam na 30 dni przed końcem i po zmianie adresu serwera.':
+        "The panel runs over HTTPS. The certificate is valid until {date} - it renews itself 30 days before it expires and whenever the server's address changes.",
+    'Odcisk SHA-256 musi się zgadzać z tym, co wypisał instalator na serwerze albo polecenie {command}:':
+        'The SHA-256 fingerprint must match the one printed by the installer on the server or by {command}:',
+    'Po instalacji otwieraj panel przez https:// - przez VPN pod adresem {address}, w domu pod adresem serwera w sieci lokalnej.':
+        "After installing, open the panel over https:// - through the VPN at {address}, at home at the server's local address.",
+    'Jeśli to nie Ty, ktoś ma dostęp do serwera ({server}). Zobacz szczegóły i przywróć stan z panelu.':
+        "If it wasn't you, someone has access to the server ({server}). See the details and restore the panel's state.",
+    'Porty na samym serwerze':
+        'Ports on the server itself',
+    'Adres serwera w LAN':
+        'Server address in the LAN',
+    'adres serwera w sieci domowej':
+        "the server's address in the home network",
+    'Adresy urządzeń (np. {storage}) ustawiasz w zakładce {hosts} - stąd zniknęły, żeby nie było dwóch miejsc na to samo.':
+        "You set device addresses (e.g. {storage}) in the {hosts} tab - they were removed from here so there aren't two places for the same thing.",
+    'Po lewej to, co panel by zapisał, po prawej to, co działa teraz na serwerze. Panel jest źródłem prawdy: przy zastosowaniu nadpisze plik swoją wersją.':
+        'On the left, what the panel would write; on the right, what is running on the server right now. The panel is the source of truth: when applying, it overwrites the file with its own version.',
+    'Dodatkowy kanał obok ntfy albo webhooka. Wysyła przez zwykłą skrzynkę (SMTP z logowaniem) - najlepiej osobne konto i hasło do aplikacji, bo hasło leży na serwerze.':
+        'An extra channel next to ntfy or the webhook. It sends through a regular mailbox (SMTP with sign-in) - ideally a separate account and an app password, because the password is stored on the server.',
+    'Pobierz certyfikat urzędu panelu ({link}) i skopiuj go na serwer proxy - proxy łączy się z panelem po HTTPS i sprawdza jego certyfikat, więc odcinek do panelu też jest szyfrowany.':
+        "Download the panel's certificate authority ({link}) and copy it to the proxy server - the proxy connects to the panel over HTTPS and checks its certificate, so the hop to the panel is encrypted too.",
+    'Uwaga: przez proxy stronę logowania zobaczy każdy, kto ma dostęp do proxy - także osoby z VPN, którym panel sam by jej nie pokazał. Włącz kod z aplikacji (TOTP) i w proxy ogranicz, kto może otworzyć panel. Zapora serwera musi wpuszczać serwer proxy na port panelu (instalator: {lan}).':
+        "Note: through the proxy, anyone who can reach the proxy will see the sign-in page - including VPN users the panel itself would not show it to. Turn on the authenticator code (TOTP) and restrict in the proxy who can open the panel. The server's firewall must let the proxy server reach the panel port (installer: {lan}).",
+    'Wysłać kopię bez szyfrowania? Cel: {storage}':
+        'Send the backup unencrypted? Destination: {storage}',
+    'Kopia automatyczna nie powstała od ponad doby - sprawdź, czy serwer ({server}) działał o tej porze.':
+        'No automatic backup for more than a day - check that the server ({server}) was running at that time.',
+    'Trzymaj ostatnie':
+        'Keep the last',
+    'Odśwież listę · {storage}':
+        'Refresh list · {storage}',
+    'Panel nie zna jeszcze żadnej kopii. Na nowym systemie uzupełnij w ustawieniach na dole strony sekcję {storage} i kliknij „Odśwież listę”.':
+        'The panel doesn\'t know any backups yet. On a new system, fill in the {storage} section in the settings at the bottom of the page and click "Refresh list".',
+    '{storage}: {n} kopii.':
+        '{storage}: {n} backups.',
+    'Ta kopia nie ma klucza serwera. Jeśli ten serwer ma inny klucz (np. nowy system), każda osoba będzie potrzebować nowego pliku - panel powie to zaraz po odtworzeniu.':
+        'This backup has no server key. If this server has a different key (e.g. a new system), everyone will need a new file - the panel will tell you right after the restore.',
+    'Zaznaczone kopie zostaną usunięte razem z plikami .sha256 - z miejsca {server}, a kopie z miejsca {storage} także stamtąd. Tego nie da się cofnąć - zostaw przynajmniej jedną zgodną kopię.':
+        'The selected backups will be deleted together with their .sha256 files - from {server}, and backups on {storage} from {storage} too. This cannot be undone - keep at least one verified backup.',
+    'Zaznaczone kopie zostaną usunięte z miejsca {server} razem z plikami .sha256. Tego nie da się cofnąć - zostaw przynajmniej jedną zgodną kopię.':
+        'The selected backups will be deleted from {server} together with their .sha256 files. This cannot be undone - keep at least one verified backup.',
+    'Zaznaczone: {n} ({server}: {local}, {storage}: {smb}).':
+        'Selected: {n} ({server}: {local}, {storage}: {smb}).',
+    'najpierw uzupełnij sekcję {storage} w ustawieniach':
+        'fill in the {storage} section in the settings first',
+    'Udział SMB na kopie. Panel łączy się z nim tylko przy kopii i na przycisk - nigdy w tle, więc to urządzenie może spać.':
+        'The SMB share for backups. The panel connects only when backing up and on a button click - never in the background, so that device can sleep.',
+    'Kopia trafia tylko tutaj. Na urządzeniu {server} nic nie zostaje.':
+        'The backup goes only here. Nothing stays on {server}.',
+    'Najpierw uzupełnij sekcję {storage} w ustawieniach na dole strony.':
+        'Fill in the {storage} section in the settings at the bottom of the page first.',
+    'Kopia zostaje tylko tutaj. Szybko, ale nie chroni przed awarią serwera.':
+        "The backup stays only here. Quick, but it doesn't protect against a server failure.",
+    'tylko {storage}':
+        '{storage} only',
+    'tylko {server}':
+        '{server} only',
+    '{storage} i {server}':
+        '{storage} and {server}',
+    '{storage} i {server} (dwie kopie)':
+        '{storage} and {server} (two copies)',
+    'Serwer, na którym działa panel. Tu leżą jego kopie; kopia wysyłana do miejsca {storage} powstaje tu na chwilę i znika zaraz po wysłaniu. Panel trzyma tu najwyżej tyle ostatnich kopii, ile wpiszesz.':
+        'The server the panel runs on. Its backups are kept here; a backup sent to {storage} is created here briefly and removed right after it is sent. The panel keeps at most as many recent backups here as you enter.',
+    'Katalog kopii':
+        'Backup folder',
+    'Kopie z miejsca {storage} dojdą do listy po kliknięciu „Odśwież listę”.':
+        'Backups on {storage} join the list after clicking "Refresh list".',
+    'Leżała w miejscu {storage} albo {server}, panel jej nie robił (np. sprzed reinstalacji).':
+        "It was on {storage} or {server}; the panel didn't make it (e.g. from before a reinstall).",
+    'Panel pyta urządzenie {storage} tylko po kliknięciu - nigdy w tle.':
+        'The panel asks {storage} only when you click - never in the background.',
+    'Plik jest w obu miejscach: {storage} i {server}. Odtworzenie bierze go z: {server}.':
+        'The file is in both places: {storage} and {server}. A restore takes it from {server}.',
+    'Plik usunęło sprzątanie „Trzymaj ostatnie” ({server}).':
+        'The file was removed by the "Keep the last" cleanup ({server}).',
+    'Przy ostatnim odświeżeniu listy pliku nie było w miejscu {storage}.':
+        'At the last list refresh the file was not on {storage}.',
+    '{storage}: sprawdzone {when}.':
+        '{storage}: checked {when}.',
+    'Wszystko, razem z kluczem serwera - odtworzysz z niej cały serwer ({server}). Hasło kopii trzymaj w menedżerze haseł.':
+        'Everything, including the server key - it restores the whole server ({server}). Keep the backup password in a password manager.',
+    '„{storage} + {server}” - plik jest w obu miejscach; odtworzenie bierze go z: {server}.':
+        '"{storage} + {server}" - the file is in both places; a restore takes it from {server}.',
+    'Usunięto kopie: {n} (pliki - {server}: {local}, {storage}: {remote}).':
+        'Backups deleted: {n} (files - {server}: {local}, {storage}: {remote}).',
+    'Klucz serwera ({server}) jest taki sam jak w kopii - dotychczasowe pliki osób działają.':
+        "The server key ({server}) matches the backup - everyone's existing files work.",
+    'Klucz serwera ({server}) jest INNY niż w kopii, a kopia go nie zawiera. Dotychczasowe pliki osób nie zadziałają - każdej osobie wydaj nowy plik (Rotacja kluczy na karcie osoby, potem Zastosuj zmiany).':
+        "The server key ({server}) is DIFFERENT from the backup, and the backup doesn't contain it. Existing files won't work - give everyone a new file (Key rotation on the person's page, then Apply changes).",
+    'Certyfikat HTTPS: powstał nowy urząd (inna nazwa albo sieć serwera niż w kopii) - zainstaluj nowy ca.crt na urządzeniach.':
+        "HTTPS certificate: a new authority was created (the server's name or network differs from the backup) - install the new ca.crt on your devices.",
+    'Zmień nazwę':
+        'Rename',
+    'nazwa urządzenia':
+        'device name',
+    'Etykieta w całym panelu, w alertach i w kopii. Enter zapisuje, Esc anuluje.':
+        'A label used across the panel, in alerts and in backups. Enter saves, Esc cancels.',
+    'Ten komputer':
+        'This computer',
+    'Czas na potwierdzenie [s]':
+        'Time to confirm [s]',
+    'od {low} do {high}':
+        'from {low} to {high}',
+    'Nieznana nazwa.':
+        'Unknown name.',
+    'Zapisano nazwę: {name}':
+        'Name saved: {name}',
+    'znaleziona: {where}':
+        'found: {where}',
+    '{n} ({server}: {local}, {storage}: {remote})':
+        '{n} ({server}: {local}, {storage}: {remote})',
+    'kopia SMB ({storage}): brak adresu albo udziału - uzupełnij je w ustawieniach kopii':
+        'SMB backup ({storage}): address or share missing - fill them in under Backup settings',
+    'kopia SMB ({storage}): brak użytkownika albo hasła - uzupełnij je w ustawieniach kopii':
+        'SMB backup ({storage}): username or password missing - fill them in under Backup settings',
+    '{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)':
+        "{storage}: user name or password rejected (user {user}) - check them; in the NAS settings also check that the account isn't disabled and the server's address ({server}) isn't blocked (e.g. automatic IP blocking)",
+    '{storage}: nie ma udziału {share}':
+        '{storage}: there is no share named {share}',
+    '{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB':
+        '{storage}: no response at {host} - check the address and that SMB is enabled on the NAS',
+    'suma kontrolna z pliku .sha256 ({storage}) się nie zgadza - nie odtwarzam':
+        "the checksum from the .sha256 file ({storage}) doesn't match - not restoring",
+})
+
+# --- ruch: pobrane / wysłane, dni bez danych ---
+EN.update({
+    'pobrane / wysłane':
+        'downloaded / uploaded',
+    'brak danych':
+        'no data',
+    'brak ruchu':
+        'no traffic',
+    'Panel nie zbierał jeszcze wtedy danych.':
+        "The panel wasn't collecting data yet.",
 })

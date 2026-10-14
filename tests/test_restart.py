@@ -509,7 +509,10 @@ try:
     row = next(r for r in page.split("<tr") if f'data-peer="{pid}"' in r)
     check("lista: handshake z pamięci zamiast „nigdy”",
           "2 dni temu" in row and "nigdy" not in row and f'data-handshake="{remembered}"' in row, row[:400])
-    check("lista: łączny ruch zamiast 0 B", "21.0 MiB / 1.8 GiB" in row, row[:400])
+    check("lista: łączny ruch zamiast 0 B (najpierw pobrane, potem wysłane - jak na wykresie)",
+          '<i>↓</i>1.8<span class="unit">GB</span>' in row
+          and '<i>↑</i>21.0<span class="unit">MB</span>' in row
+          and row.index("<i>↓</i>") < row.index("<i>↑</i>"), row[:600])
     check("lista: podpowiedź, od kiedy liczone", f"łącznie od {since_text}" in row)
     _c, body, _l = request("/api/peers")
     entry = next(p for p in json.loads(body)["peers"] if p["id"] == pid)
@@ -517,7 +520,7 @@ try:
           entry["handshake"] == remembered and entry["tx"] == int(1.8 * GIB), str(entry))
     _c, page, _l = request(f"/peers/{pid}")
     check("karta peera: handshake z pamięci i ruch łącznie",
-          "2 dni temu" in page and "ruch łącznie" in page and "1.8 GiB" in page)
+          "2 dni temu" in page and "ruch łącznie" in page and '<i>↓</i>1.8<span class="unit">GB</span>' in page)
     time.sleep(9)       # harmonogram panelu zdąży zapisać pierwszą próbkę po „restarcie”
     total = live.execute("SELECT tx_total, last_handshake FROM peer_stats WHERE peer_id = ?",
                          (pid,)).fetchone()
@@ -526,7 +529,8 @@ try:
     _c, page, _l = request("/")
     row = next(r for r in page.split("<tr") if f'data-peer="{pid2}"' in r)
     check("po aktualizacji pamięć startuje z historii: handshake sprzed restartu i ruch z wykresu",
-          "5 dni temu" in row and "21.0 MiB / 2.0 GiB" in row, row[300:900])
+          "5 dni temu" in row and '<i>↓</i>2.0<span class="unit">GB</span>' in row
+          and '<i>↑</i>21.0<span class="unit">MB</span>' in row, row[300:1200])
     live.execute("INSERT INTO settings(key, value) VALUES ('server_pubkey', 'STARYKLUCZ') "
                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     live.commit()

@@ -219,7 +219,7 @@ The installer detected your home network, the Pi's address and the interface. Ch
 | **LAN subnet** | your home network, e.g. `192.168.1.0/24` — detected at install |
 | VPN subnet | the tunnel network, e.g. `10.0.0.0/24` |
 | Server address in the VPN | the Pi's address inside the tunnel, e.g. `10.0.0.1` |
-| **Pi address in the LAN** | the Pi's fixed address, e.g. `192.168.1.10` — detected at install |
+| **Server address in the LAN** | the Pi's fixed address, e.g. `192.168.1.10` — detected at install |
 | WAN interface | the Pi's internet-facing interface: `eth0`, `end0`, `wlan0`… — detected at install |
 | Listen port | the WireGuard port — `51820` by default; if your router forwards a different one, change it (on path A the import in Step 11 fills it in from `wg0.conf` anyway) |
 | DNS for full mode | e.g. `9.9.9.9` — Quad9: blocks malicious domains and doesn't profile queries |
@@ -297,7 +297,7 @@ You can rename people to real names right away and add devices: `wgctl set 10.0.
 
 **Where: Browser → Tiers**
 
-Through the VPN, the panel opens only for people in a tier that lists the panel's port (`8080`) under **Ports on the Pi itself**. By default that's the **ADMIN** tier (`22,3389,8080`), and you're in it since Step 12 — there's nothing to do. Just check that the ADMIN card has `8080`.
+Through the VPN, the panel opens only for people in a tier that lists the panel's port (`8080`) under **Ports on the server itself**. By default that's the **ADMIN** tier (`22,3389,8080`), and you're in it since Step 12 — there's nothing to do. Just check that the ADMIN card has `8080`.
 
 > **Why:** the panel is reachable from the home network, but through the VPN only for the tiers you choose. Everyone else gets a block on the panel port even though they're on the same VPN network. Without this, you can't log in to the panel from outside your home.
 
@@ -505,7 +505,7 @@ Do **Step 7** and **Step 8** from path A.
 
 **Where: Browser → Settings**
 
-As in **Step 9** from path A. The most important fields are **Client endpoint** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820` — and **Listen port**: the same port your router forwards (`51820` by default). Also check **Pi address in the LAN** and the **LAN subnet**.
+As in **Step 9** from path A. The most important fields are **Client endpoint** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820` — and **Listen port**: the same port your router forwards (`51820` by default). Also check **Server address in the LAN** and the **LAN subnet**.
 
 ## Step B10 — Add people
 
@@ -624,7 +624,7 @@ When something doesn't match, the installer says what to fix. These NAS messages
 
 > **A backup without the server key** (basic, or from an older version): the installer says so and asks: **1) paste the old key** (from your password manager — everyone keeps connecting with their old files) or **2) generate a new one** (peers and settings come back, but everyone needs a new file — Step C5).
 
-> **From the panel instead of the installer:** when the panel is already installed — **Backups**, at the bottom in **Backup settings** enter the NAS details and **Save settings**, then in the **Backup list** click **Refresh list from NAS**. Select the backup (click the row), **Restore selected…** — in the dialog tick **Sign in with the old password**, enter the backup password and click **Restore backup**. After the restore the panel tells you whether the server key came back and whether people's existing files will work.
+> **From the panel instead of the installer:** when the panel is already installed — **Backups**, at the bottom in **Backup settings** enter the NAS details and **Save settings**, then in the **Backup list** click **Refresh list · NAS**. Select the backup (click the row), **Restore selected…** — in the dialog tick **Sign in with the old password**, enter the backup password and click **Restore backup**. After the restore the panel tells you whether the server key came back and whether people's existing files will work.
 
 ## Step C3 — Check
 
@@ -748,10 +748,10 @@ The **Backups** page has three parts: at the top the **status** (what kind of ba
 | Share | `backup` |
 | Directory on the share | `wg-panel` |
 | Username / Password | `wg-backup` / the password from Step 19 |
-| On the Pi: Backup folder on the Pi | leave empty (default) |
-| Keep on the Pi (last) | `14` |
+| Pi: Backup folder | leave empty (default) |
+| Keep the last | `14` |
 
-**Save settings.** At the top of the page, under **Back up now – where?**, there are three buttons: **To the NAS**, **To the Pi** and **To this computer**. Each makes one backup exactly there and nowhere else; the **Where to** field only applies to automatic backups. Click **To the NAS**.
+**Save settings.** At the top of the page, under **Back up now – where?**, there are three buttons: **NAS**, **Pi** and **This computer**. Each makes one backup exactly there and nowhere else; the **Where to** field only applies to automatic backups. Click **NAS**.
 
 You should see: three green dots at the top — **Backup type: FULL, encrypted**, **Automatic: daily at 03:30 → NAS only** and **Last backup: … → NAS** with "checksum matches". In the **Backup list** a new row: Where "NAS", Type "full", State "checked". On the NAS, in the `backup/wg-panel` share, two files appear: the backup and its `.sha256`.
 
@@ -762,7 +762,7 @@ You should see: three green dots at the top — **Backup type: FULL, encrypted**
 | NAS only | only on the NAS — the file on the Pi exists just long enough to be sent and is removed right after (also when sending fails) |
 | Pi only | in the backup folder on the Pi (at most the last 14) — doesn't protect against a card failure |
 | NAS and Pi (two copies) | in both places — a restore takes the file from the Pi and doesn't have to wake the NAS |
-| To this computer (button only) | the browser downloads the file; the panel doesn't keep it and it isn't on the list |
+| This computer (button only) | the browser downloads the file; the panel doesn't keep it and it isn't on the list |
 
 If the backup fails, a red bar shows the reason:
 
@@ -991,7 +991,7 @@ After they confirm it works: **Issued — delete the key**. The panel remembers 
 
 ## Restoring from a backup
 
-**Browser → Backups → Backup list.** Every backup is on the list once — with its date, location (NAS / Pi / NAS + Pi), type (full / encrypted / basic / failed) and checksum state. Backups that exist only on the NAS (e.g. on a new system) join the list after you click **Refresh list from NAS** — the only button that asks the NAS for its list; the panel never does it in the background (the NAS may be asleep).
+**Browser → Backups → Backup list.** Every backup is on the list once — with its date, location (NAS / Pi / NAS + Pi), type (full / encrypted / basic / failed) and checksum state. Backups that exist only on the NAS (e.g. on a new system) join the list after you click **Refresh list · NAS** — the only button that asks the NAS for its list; the panel never does it in the background (the NAS may be asleep).
 
 **What the labels in the backup list mean** (the same is in the panel under the list, in "What do the labels mean?"):
 
@@ -1040,7 +1040,7 @@ A backup you have never tried to restore is just hope. There are two levels.
 
 **Where: Browser → Backups, then Pi**
 
-1. Under **Back up now** click **To the Pi**, then **To the NAS** — two new rows should appear in the Backup list (Where "Pi" and "NAS").
+1. Under **Back up now** click **Pi**, then **NAS** — two new rows should appear in the Backup list (Where "Pi" and "NAS").
 2. Select both and click **Check selected** — the panel downloads the files from where they live (the NAS too) and compares SHA-256 checksums. Every row should have the state **checked**.
 3. On the Pi:
 
@@ -1079,9 +1079,9 @@ You should see: the same people, tiers and names as on the real Pi (compare with
 
 Select backups in the Backup list (click a row; the box in the header selects all, **Select failed** — all failed ones) and click **Delete selected**. The panel deletes the backup files together with `.sha256` — from the Pi and from the NAS — and only then the entry from the list. If a file can't be deleted (e.g. the NAS is off), the entry stays, so you don't lose track of a file that is still there.
 
-> **Backups from before a reinstall** (made by the previous system) are unknown to the panel at first — they appear after **Refresh list from NAS**, labelled "found", and can be checked, restored or deleted like any other. The other way round: a backup whose file is no longer on the NAS after a refresh (e.g. deleted by hand) gets the state "file missing" — just delete its entry.
+> **Backups from before a reinstall** (made by the previous system) are unknown to the panel at first — they appear after **Refresh list · NAS**, labelled "found", and can be checked, restored or deleted like any other. The other way round: a backup whose file is no longer on the NAS after a refresh (e.g. deleted by hand) gets the state "file missing" — just delete its entry.
 
-> **"Keep on the Pi (last)" cleans only the Pi.** Backups on the NAS stay until you delete them — one is a few KB, so even daily backups for a year come to about 2 MB.
+> **"Keep the last" cleans only the Pi.** Backups on the NAS stay until you delete them — one is a few KB, so even daily backups for a year come to about 2 MB.
 
 > ⚠ Always keep at least one full backup in the state "checked" — preferably on the NAS.
 
@@ -1106,6 +1106,20 @@ Every change to settings, people and rules waits until you click **Apply changes
 The **Hosts** tab: enter once `printer = 192.168.1.70`, `camera = 192.168.1.80` and so on. In rules you use names. Changing an address in one place updates every rule.
 
 > ⚠ Give the devices in the catalog fixed addresses (a DHCP reservation on the router). The catalog only translates a name to an address — if a device changes its IP by itself, the rule points at nothing.
+
+## Your own device names
+
+**Where: Browser → Backups → Backup settings at the bottom**
+
+The panel names two devices: the **server** it runs on ("Pi" by default) and the **backup location** (the SMB share, "NAS" by default). To change either:
+
+1. Next to the section heading (e.g. **NAS**) click **Rename**.
+2. Type a name (24 characters at most) — the heading changes as you type.
+3. **Save** (or Enter) — the page reloads and the new name is used everywhere. **Cancel** (or Esc) goes back to the previous one.
+
+The name is saved on its own, independently of the other settings. If you have other unsaved changes in Backup settings, the page doesn't reload so you don't lose them. An empty field restores the default name.
+
+> The name is a label, so any name works. Names are stored in full backups and come back on restore. The installer (including `install.sh --restore`) uses the default names because it runs before the panel has a database.
 
 ## How long the panel keeps history
 
@@ -1158,7 +1172,7 @@ The **Hosts** tab: enter once `printer = 192.168.1.70`, `camera = 192.168.1.80` 
 | "WireGuard interface: problem" | **users have no access** — `systemctl status wg-quick@wg0`, then `sudo systemctl restart wg-quick@wg0` |
 | "Pi power" | power supply or cable too weak — replace with an original one (5 V, 3 A for Pi 4 / 5 A for Pi 5); risks corrupting the card |
 | "Pi temperature" | check the cooling and that the case isn't in a closed cupboard |
-| "disk space" | `df -h`; lower "Keep on the Pi (last)" in Backup settings or move backups to the NAS |
+| "disk space" | `df -h`; lower "Keep the last" in Backup settings or move backups to the NAS |
 | "HTTPS certificate" | `wgctl tls --renew`; on error — `journalctl -u wg-panel-helper -n 40` |
 | the SD card died | path C at the start of this guide |
 

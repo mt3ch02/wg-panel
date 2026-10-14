@@ -161,14 +161,14 @@ try:
     write("sys/class/thermal/thermal_zone0/temp", "85000")
     guard()
     guard()
-    check("przegrzanie - ostrzezenie", titles() == ["temperatura Pi: problem"]
+    check("przegrzanie - ostrzezenie", titles() == ["temperatura (Pi): problem"]
           and "85" in received[0]["message"], str(received))
     write("sys/class/thermal/thermal_zone0/temp", "45000")
     guard()
     received.clear()
     write("sys/devices/platform/soc/soc:firmware/get_throttled", "0x50005")
     guard()
-    check("za niskie napiecie - od razu (to zdarzenie, nie stan)", titles() == ["zasilanie Pi"],
+    check("za niskie napiecie - od razu (to zdarzenie, nie stan)", titles() == ["zasilanie (Pi)"],
           str(titles()))
     guard()
     check("raz na uruchomienie Pi", len(received) == 1, str(titles()))
@@ -180,7 +180,7 @@ try:
     watchdog.MIN_FREE_MB = 10 ** 9
     guard()
     guard()
-    check("malo miejsca na karcie - ostrzezenie", titles() == ["miejsce na karcie: problem"],
+    check("malo miejsca na karcie - ostrzezenie", titles() == ["miejsce na dysku: problem"],
           str(titles()))
     watchdog.MIN_FREE_MB = 0
     guard()

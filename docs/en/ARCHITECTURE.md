@@ -77,7 +77,7 @@ A peer created with a start date in the future waits suspended and switches on b
 
 The panel listens on the addresses in `WGPANEL_HOST` (a comma-separated list or `0.0.0.0`); `127.0.0.1` is always included, and an address that doesn't exist yet (`10.0.0.1` before `wg0` is up) is watched in the background. Installing with `LAN_ACCESS=192.168.1.0/24` exposes the panel to the home network and adds a ufw rule.
 
-From the VPN, **only tiers that list the panel's port under "Ports on the Pi itself"** (`host_access`; by default ADMIN: `22,3389,8080`) can open the panel. The panel port is one of the managed ports of the `WG-USERS-HOST` chain, so everybody else gets DROP despite being on the VPN. Older versions had a separate per-person switch (`panel_access`); the migration moves it to the port in that person's tier. With `LAN_ACCESS` the ufw rule (commented `wg-panel LAN`) lets only that network in on the panel port; without it, the ufw rule allows `wg0` only.
+From the VPN, **only tiers that list the panel's port under "Ports on the server itself"** (`host_access`; by default ADMIN: `22,3389,8080`) can open the panel. The panel port is one of the managed ports of the `WG-USERS-HOST` chain, so everybody else gets DROP despite being on the VPN. Older versions had a separate per-person switch (`panel_access`); the migration moves it to the port in that person's tier. With `LAN_ACCESS` the ufw rule (commented `wg-panel LAN`) lets only that network in on the panel port; without it, the ufw rule allows `wg0` only.
 
 ## What goes through the VPN on the client
 
@@ -114,11 +114,15 @@ Off by default. After turning it on (Settings → IPv6):
 
 After enabling IPv6, peers need **new configuration files** — the old ones have no IPv6 address.
 
+## Device names
+
+`panel/names.py`: the server ("Pi") and the backup location ("NAS") are the settings `name_server` and `name_storage`, not hard-coded text. The panel loads them at the start of every request; texts put the name in its base form as a label (`_("... {storage} ...", **names.kw())`), so any name reads correctly. Backups → Rename saves just the name (`POST /backups/name`). The names are ordinary settings, so full backups carry them.
+
 ## Traffic history
 
 The scheduler saves counters from `wg show dump` every 5 minutes. Hourly series are computed from the differences between consecutive samples; a counter drop means an interface restart and is handled. Samples older than 8 days are deleted.
 
-The chart: a total on the peer list, a separate one on each peer's page. Above the axis — what the client downloaded, below it — what it uploaded (on its own scale, so small uploads stay visible). Seven equal columns, each from midnight to midnight: the six previous days and today, highlighted; hours that haven't happened yet are hatched and a dashed line marks "now". Daily totals (↓ downloaded, ↑ uploaded) sit under the columns, the totals for the whole chart in its header. The top of the axis is a round value just above the tallest bar.
+The chart: a total on the peer list, a separate one on each peer's page. Above the axis — what the client downloaded, below it — what it uploaded (on its own scale, so small uploads stay visible). Seven equal columns, each from midnight to midnight: the six previous days and today, highlighted; hours that haven't happened yet are hatched and a dashed line marks "now". Daily totals (↓ downloaded, ↑ uploaded) sit under the columns, the totals for the whole chart in its header. The top of the axis is a round value just above the tallest bar. Hours before the first sample (`traffic.hourly` → `nodata`) are dimmed, and a day with no samples at all says "no data" instead of zeros; a day with history but no traffic says "no traffic". The peer list and the peer page show traffic the same way as the chart: ↓ downloaded (the server's tx), then ↑ uploaded (rx), in GB/MB.
 
 The SVG holds only bars and lines — they stretch with the card. All text (axis, days, totals, the hour tooltip) is HTML, so it keeps its size whatever the card's width (`ui.traffic_chart`).
 
@@ -309,7 +313,7 @@ After a restore in the panel (Backups → select a backup → Restore selected�
 
 Targets: **the Pi** (a working directory, may be a mount point of a share) or **a NAS** over SMB (`smbclient`, the password passed through an environment variable, not in arguments — so it doesn't leak into the process list).
 
-**The Backups page.** At the top the status in three lines (backup type, schedule, last backup) and "Back up now – where?" (NAS / Pi / this computer); in the middle one list of all backups (the panel's history plus files found on the Pi and on the NAS, each backup once) with actions on the selected ones: check the checksum, restore (a dialog with the backup password and the panel account), delete; settings at the bottom. The NAS is asked for its list only by the "Refresh list from NAS" button — the panel remembers the result and marks backups that are no longer on the NAS, without waking the server again.
+**The Backups page.** At the top the status in three lines (backup type, schedule, last backup) and "Back up now – where?" (NAS / Pi / this computer); in the middle one list of all backups (the panel's history plus files found on the Pi and on the NAS, each backup once) with actions on the selected ones: check the checksum, restore (a dialog with the backup password and the panel account), delete; settings at the bottom. The NAS is asked for its list only by the "Refresh list · NAS" button — the panel remembers the result and marks backups that are no longer on the NAS, without waking the server again.
 
 The list has the columns When / Where / Type / State (`ui.backup_items`, `ui.backup_row`). Type: full, full, no key (a full backup made while the helper didn't hand over the server key), basic, before restore / before update (snapshots, `export.snapshot_local`), found (a file on the Pi or the NAS that isn't in the history), failed. State: checked, not checked, damaged, failed, file missing. A collapsible legend under the list explains them.
 
