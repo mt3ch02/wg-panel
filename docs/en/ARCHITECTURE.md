@@ -124,6 +124,10 @@ The scheduler saves counters from `wg show dump` every 5 minutes. Hourly series 
 
 The chart: a total on the peer list, a separate one on each peer's page. Above the axis — what the client downloaded, below it — what it uploaded (on its own scale, so small uploads stay visible). Seven equal columns, each from midnight to midnight: the six previous days and today, highlighted; hours that haven't happened yet are hatched and a dashed line marks "now". Daily totals (↓ downloaded, ↑ uploaded) sit under the columns, the totals for the whole chart in its header. The top of the axis is a round value just above the tallest bar. Hours before the first sample (`traffic.hourly` → `nodata`) are dimmed, and a day with no samples at all says "no data" instead of zeros; a day with history but no traffic says "no traffic". The peer list and the peer page show traffic the same way as the chart: ↓ downloaded (the server's tx), then ↑ uploaded (rx), in GB/MB.
 
+The chart card is always there (`ui.chart_card`). Until there are two samples with traffic between them (`ui.chart_ready`) — 5 to 10 minutes after a fresh install — it shows a note with the sampling interval taken from the `traffic_sample_minutes` setting. The card carries `data-chart-src` (`/api/chart` or `/api/peers/<id>/chart`) and `data-chart-ready`; without data the page polls that address every 30 s (`wgChartWatch`, skipped while the browser tab is hidden), and when `ready` comes back `true` it inserts the ready-made HTML from `ui.chart_body` and wires up scrolling and the tooltip (`wgChartInit`). Then the polling stops. An already-drawn chart is not refreshed in place — it updates on reload.
+
+Handshake "ago" times: the timestamp is server time, so the peer list script counts it by the server's clock, not the browser's. The page carries the server time (`WG_SKEW`) and every `/api/peers` response (`now`) corrects it; the result is never negative (the same goes for `ui._handshake` on the server). A computer whose clock is a few minutes off no longer shows "-107 s ago".
+
 The SVG holds only bars and lines — they stretch with the card. All text (axis, days, totals, the hour tooltip) is HTML, so it keeps its size whatever the card's width (`ui.traffic_chart`).
 
 **Anomaly:** the last full hour is larger than N times the median of the week's hours (default 10×) and above a threshold (default 500 MB). The median is computed only from hours with any traffic, and only after 12 such hours — so a new peer doesn't alarm right away.
@@ -177,7 +181,7 @@ wgctl apply                       # with the fuse; then wgctl confirm
 wgctl backup                      # a backup per settings, verified at once
 wgctl backup --target local       # this one backup elsewhere: smb / local / both
 wgctl backup --verify             # check the checksums of the latest backups
-wgctl host list / host add printer 192.168.1.70 --ip6 fd00:77::70
+wgctl host list / host add printer 192.168.1.70 --ip6 fd00:50::70
 wgctl integrity                   # did someone change the config outside the panel (exit 3 = yes)
 wgctl totp off admin              # emergency: turn off the authenticator code
 wgctl traffic Marek               # traffic for the last 7 days, day by day

@@ -354,20 +354,22 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 
 // --- wykres ruchu: na telefonie przewijany w bok od najnowszych godzin; dymek godziny ---
-document.addEventListener("DOMContentLoaded", function () {
+// root: cala strona albo karta, do ktorej wykres doszedl pozniej (wgChartWatch)
+function wgChartInit(root) {
   var toNewest = function () {
-    document.querySelectorAll(".chart-scroll").forEach(function (box) {
+    root.querySelectorAll(".chart-scroll").forEach(function (box) {
       box.scrollLeft = box.scrollWidth;
     });
   };
-  document.querySelectorAll(".chart-scroll").forEach(function (box) {
+  root.querySelectorAll(".chart-scroll").forEach(function (box) {
     var edge = function () { box.classList.toggle("scrolled", box.scrollLeft > 2); };
     box.addEventListener("scroll", edge, { passive: true });
     window.addEventListener("load", edge);
+    edge();
   });
   toNewest();
   window.addEventListener("load", toNewest);    // CSS moze dojsc po DOMContentLoaded
-  document.querySelectorAll(".chart-plot").forEach(function (plot) {
+  root.querySelectorAll(".chart-plot").forEach(function (plot) {
     var tip = plot.querySelector(".chart-tip");
     var show = function (ev) {
       var hit = ev.target.closest ? ev.target.closest("rect.hit") : null;
@@ -396,6 +398,32 @@ document.addEventListener("DOMContentLoaded", function () {
       if (ev.pointerType === "mouse") tip.hidden = true;
     });
   });
+}
+// karta bez wykresu (za malo probek) pyta co 30 s, czy dane juz sa - wykres wskakuje sam,
+// bez przeladowania strony; potem pytanie ustaje
+function wgChartWatch() {
+  var waiting = document.querySelectorAll('[data-chart-src][data-chart-ready="0"]');
+  if (!waiting.length) return;
+  var timer = setInterval(function () {
+    if (document.hidden) return;
+    var left = document.querySelectorAll('[data-chart-src][data-chart-ready="0"]');
+    if (!left.length) { clearInterval(timer); return; }
+    left.forEach(function (card) {
+      fetch(card.dataset.chartSrc, { headers: { "Accept": "application/json" }, credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data || !data.ready || card.dataset.chartReady === "1") return;
+          card.innerHTML = data.html;
+          card.dataset.chartReady = "1";
+          wgChartInit(card);
+        })
+        .catch(function () {});
+    });
+  }, 30000);
+}
+document.addEventListener("DOMContentLoaded", function () {
+  wgChartInit(document);
+  wgChartWatch();
 });
 
 // --- telefon: menu nawigacji i tabele jako listy ---
@@ -729,9 +757,12 @@ document.addEventListener("DOMContentLoaded", function () {{
     window.history.replaceState({{}}, "", url.pathname + (url.search || "") + url.hash);
   }}
 }});
+function wgServerNow() {{
+  return Math.floor(Date.now() / 1000 + WG_SKEW);
+}}
 function wgHandshakeText(seconds, now) {{
   if (!seconds) return [WG_T.never, "dead"];
-  var d = now - seconds;
+  var d = Math.max(0, now - seconds);
   var state = d < 180 ? "live" : (d < 3600 ? "stale" : "dead");
   if (d < 60) return [WG_T.s_ago.replace("{{n}}", d), state];
   if (d < 3600) return [WG_T.min_ago.replace("{{n}}", Math.floor(d / 60)), state];
@@ -753,7 +784,7 @@ function wgBytes(value) {{
   return (i === 0 ? value : value.toFixed(1)) + " " + units[i];
 }}
 function wgTick() {{
-  var now = Math.floor(Date.now() / 1000);
+  var now = wgServerNow();
   document.querySelectorAll("td.hs[data-handshake]").forEach(function (cell) {{
     var out = wgHandshakeText(parseInt(cell.dataset.handshake || "0", 10), now);
     cell.textContent = out[0];
@@ -765,6 +796,7 @@ function wgPoll() {{
     .then(function (r) {{ return r.ok ? r.json() : null; }})
     .then(function (data) {{
       if (!data) return;
+      if (data.now) WG_SKEW = data.now - Date.now() / 1000;   // zegar komputera mogl sie przestawic
       var iface = document.getElementById("stat-iface");
       if (iface) iface.textContent = iface.textContent.split(" ")[0] + (data.up ? " up" : " down");
       var svc = document.getElementById("stat-service");
@@ -838,7 +870,10 @@ document.addEventListener("DOMContentLoaded", function () {{
   document.querySelectorAll('select[name="access_mode"]').forEach(wgAccessMode);
 }});
 </script>
-<script>var WG_T = {js_texts()};</script>
+<script>var WG_T = {js_texts()};
+// handshake to czas serwera - liczymy "temu" wedlug zegara serwera, nie komputera, z ktorego
+// ktos sie loguje (spozniony o 2 minuty dawal "-120 s temu")
+var WG_SKEW = {int(time.time())} - Date.now() / 1000;</script>
 <script>{PANEL_JS}</script>
 <link rel="stylesheet" href="/static/style.css?v={style_version()}">
 </head><body>
@@ -1068,7 +1103,7 @@ def totp_enrolled(secret: str, uri: str, qr_svg: str) -> str:
 def _handshake(seconds: int) -> tuple:
     if not seconds:
         return _("nigdy"), "dead"
-    delta = int(time.time()) - seconds
+    delta = max(0, int(time.time()) - seconds)   # handshake "z przyszlosci" to nadal "teraz"
     if delta < 180:
         state = "live"
     elif delta < 3600:
@@ -1244,12 +1279,8 @@ def dashboard(sess, cfg, peers, status, dirty: bool, pending, helper_error: str 
           <a class="button danger" href="/integrity">{_("Szczegóły")}</a>
         </div>"""
 
-    chart_box = ""
-    if chart and any(p["rx"] or p["tx"] for p in chart):
-        chart_box = f"""
-        <div class="card">
-          {traffic_chart(chart, _("Ruch w tunelu - ostatnie 7 dni"))}
-        </div>"""
+    # karta jest zawsze - bez danych z notka, a wykres dochodzi sam (wgChartWatch)
+    chart_box = chart_card(chart, _("Ruch w tunelu - ostatnie 7 dni"), "/api/chart", cfg)
 
     heads = "".join(f"<th>{h}</th>" for h in (
         _("Nazwa"), "IP", _("Tier"), _("Stan"), "Handshake", _("pobrane / wysłane"), _("Ważny do")))
@@ -1462,10 +1493,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
     warning_badge = '<span class="badge warn">' + e(warning) + '</span>' if warning else ""
     ip6 = ('<div><span class="muted">' + _("adres IPv6") + '</span><strong>' + e(peer['ip6']) +
            '</strong></div>' if peer['ip6'] and cfg.get('ipv6_enabled') == '1' else "")
-    chart_html = (traffic_chart(chart, _("Ruch - ostatnie 7 dni"))
-                  if chart and any(p["rx"] or p["tx"] for p in chart)
-                  else '<h2>' + _("Ruch - ostatnie 7 dni") + '</h2><p class="muted">' + _("Brak danych. Próbki zbierane są co kilka minut, "
-                                                 "wykres pojawi się po pierwszej godzinie ruchu.") + '</p>')
+    chart_html = chart_card(chart, _("Ruch - ostatnie 7 dni"), f"/api/peers/{peer['id']}/chart", cfg)
     route_source = (_("ustawione u tej osoby") if route["own"]
                     else _("z tieru {tier}", tier=e(peer["tier_name"] or "")))
     notes = "".join('<div class="banner err">' + e(n) + '</div>' for n in route["notes"])
@@ -1555,9 +1583,7 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
         </div>
       </div>
 
-      <div class="card">
-        {chart_html}
-      </div>
+      {chart_html}
 
       <div class="card">
         <h2>{_("Co idzie przez VPN")}</h2>
@@ -1842,7 +1868,7 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
           <label>{_("Podsieć VPN IPv6")}<input name="vpn6" value="{e(cfg.get('vpn6', ''))}"></label>
           <label>{_("Adres serwera")}<input name="server_ip6" value="{e(cfg.get('server_ip6', ''))}"></label>
           <label>{_("Prefiksy LAN IPv6")}<input name="lan6" value="{e(cfg.get('lan6', ''))}"
-                 placeholder="fd00:77::/64, 2a02:.../64"></label>
+                 placeholder="fd00:50::/64, 2a02:.../64"></label>
           <label>DNS IPv6<input name="dns6" value="{e(cfg.get('dns6', ''))}"></label>
           <label class="check"><input type="checkbox" name="nat6" value="1"
               {'checked' if cfg.get('nat6', '1') == '1' else ''}> {_("NAT66 dla trybu pełnego")}</label>
@@ -2737,6 +2763,37 @@ def _value_unit(value: float) -> str:
     """'3.3 GB' -> liczba wyrazna, jednostka mniejsza i szara."""
     number, _sep, unit = _short(value).partition(" ")
     return f'{e(number)}<span class="unit">{e(unit)}</span>'
+
+
+def chart_ready(series: list | None) -> bool:
+    """Wykres ma co narysowac: sa co najmniej dwie probki z ruchem pomiedzy nimi."""
+    return bool(series) and any(p["rx"] or p["tx"] for p in series)
+
+
+def _every_minutes(n: int) -> str:
+    """'co minutę', 'co 2 minuty', 'co 5 minut' - odmiana jak w mowie."""
+    if n == 1:
+        return _("minutę")
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return _("{n} minuty", n=n)
+    return _("{n} minut", n=n)
+
+
+def chart_body(series: list | None, title: str, cfg: dict) -> str:
+    """Wnetrze karty wykresu: wykres albo - gdy danych jeszcze nie ma - tytul i notka.
+    To samo zwraca /api/chart, wiec wykres doklejony pozniej wyglada jak przy wejsciu."""
+    if chart_ready(series):
+        return traffic_chart(series, title)
+    minutes = max(1, int(cfg.get("traffic_sample_minutes", "5") or 5))
+    note = _("Panel zbiera próbki ruchu co {every}. Wykres pojawi się, gdy zbierze pierwsze dwie.",
+             every=_every_minutes(minutes))
+    return f'<h2>{title}</h2><p class="muted chart-wait">{e(note)}</p>'
+
+
+def chart_card(series: list | None, title: str, src: str, cfg: dict) -> str:
+    ready = "1" if chart_ready(series) else "0"
+    return (f'<div class="card" data-chart-src="{e(src)}" data-chart-ready="{ready}">'
+            f'{chart_body(series, title, cfg)}</div>')
 
 
 def traffic_chart(series: list[dict], title: str) -> str:

@@ -1161,6 +1161,8 @@ The name is saved on its own, independently of the other settings. If you have o
 | alarm about a mismatched backup | Backups → select backups → **Check selected**, make a new backup, check who has access to the `backup` folder |
 | alarm about unusual traffic | the person's page → chart; if it isn't them — key rotation |
 | after a Pi reboot, integrity: "first FORWARD rule is not a jump to WG-USERS" | Docker inserted its rules in front of the panel — older panel versions did that. Update the panel and click **Apply changes** once (section "Configuration changed outside the panel") |
+| right after installation there is no traffic chart, only the note "The panel samples traffic every 5 minutes…" | normal — the chart needs two samples with traffic between them, so 5–10 minutes. It appears by itself on the peer list and on the person's page, no reload needed |
+| the handshake shows a negative time ("-107 s ago") | an older panel version counted by the clock of the computer you sign in from; the current one uses the Pi's clock — update the panel |
 | after a Pi reboot, "Handshake never" and traffic 0 | an older panel version — the current one keeps the last handshake and total traffic in its database; update the panel |
 | lost phone with the login code | `wgctl totp off admin` |
 | `wgctl`: "you are already in the wg-panel group, but this session…" | log out and in again, or `newgrp wg-panel` |

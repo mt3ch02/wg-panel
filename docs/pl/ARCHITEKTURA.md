@@ -188,6 +188,19 @@ pierwszej próbki (`traffic.hourly` → `nodata`) są przygaszone, a dzień bez 
 danych” zamiast zer; dzień z historią, ale bez ruchu — „brak ruchu”. Lista peerów i strona osoby
 pokazują ruch tak samo jak wykres: ↓ pobrane (tx serwera), potem ↑ wysłane (rx), w GB/MB.
 
+Karta wykresu jest zawsze (`ui.chart_card`). Dopóki nie ma dwóch próbek z ruchem pomiędzy nimi
+(`ui.chart_ready`) — po świeżej instalacji 5–10 minut — pokazuje notkę z odstępem próbek
+z ustawienia `traffic_sample_minutes`. Karta ma `data-chart-src` (`/api/chart` albo
+`/api/peers/<id>/chart`) i `data-chart-ready`; bez danych strona pyta ten adres co 30 s
+(`wgChartWatch`, nie w ukrytej karcie przeglądarki), a gdy `ready` przyjdzie jako `true`, wkleja
+gotowe HTML z `ui.chart_body` i podpina przewijanie i dymek (`wgChartInit`). Potem pytanie ustaje.
+Gotowego wykresu strona nie odświeża w miejscu — zmienia się po przeładowaniu.
+
+Czas „temu” przy handshake'u: znacznik jest czasem serwera, więc skrypt listy liczy go według zegara
+serwera, nie przeglądarki. Strona przynosi czas serwera (`WG_SKEW`), a każda odpowiedź `/api/peers`
+(`now`) go poprawia; wynik nigdy nie jest ujemny (tak samo `ui._handshake` po stronie serwera).
+Komputer z zegarem przestawionym o kilka minut nie pokazuje już „-107 s temu”.
+
 W SVG są tylko słupki i linie — rozciągają się z kartą. Cały tekst (oś, dni, sumy, dymek godziny)
 jest w HTML, więc ma stałą wielkość niezależnie od szerokości karty (`ui.traffic_chart`).
 
@@ -255,7 +268,7 @@ wgctl backup                      # kopia zgodnie z ustawieniami, od razu weryfi
 wgctl backup --target local       # ta jedna kopia gdzie indziej: smb / local / both
 wgctl backup --verify             # sprawdz sumy kontrolne ostatnich kopii
 wgctl host list                   # katalog hostow
-wgctl host add drukarka 192.168.1.70 --ip6 fd00:77::70
+wgctl host add drukarka 192.168.1.70 --ip6 fd00:50::70
 wgctl integrity                   # czy ktos zmienil konfiguracje poza panelem (kod 3 = tak)
 wgctl totp off admin              # awaryjnie wylacz kod z aplikacji (zgubiony telefon)
 wgctl traffic Marek               # ruch z ostatnich 7 dni, dzien po dniu

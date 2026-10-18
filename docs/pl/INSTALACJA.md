@@ -1170,6 +1170,8 @@ Wpisane `0` znaczy **bez limitu** — panel niczego z tej listy nie kasuje. Baza
 | alarm o niezgodnej kopii | Kopie → zaznacz kopie → **Sprawdź zaznaczone**, zrób nową kopię, sprawdź, kto ma dostęp do folderu `backup` |
 | alarm o nietypowym ruchu | strona osoby → wykres; jeśli to nie ona — rotacja kluczy |
 | po restarcie Pi integralność: „pierwsza reguła FORWARD to nie skok do WG-USERS” | Docker wstawił swoje reguły przed panel — tak było w starszych wersjach panelu. Zaktualizuj panel i raz kliknij **Zastosuj zmiany** (sekcja „Konfiguracja zmieniona poza panelem”) |
+| zaraz po instalacji nie ma wykresu ruchu, tylko notka „Panel zbiera próbki ruchu co 5 minut…” | to normalne — wykres potrzebuje dwóch próbek z ruchem pomiędzy nimi, czyli 5–10 minut. Pojawi się sam na liście peerów i na stronie osoby, bez przeładowania |
+| handshake pokazuje czas na minusie („-107 s temu”) | starsza wersja panelu liczyła według zegara komputera, z którego się logujesz; obecna liczy według zegara Pi — zaktualizuj panel |
 | po restarcie Pi „Handshake nigdy” i ruch 0 | starsza wersja panelu — obecna pamięta ostatni handshake i ruch łącznie w bazie; zaktualizuj panel |
 | zgubiony telefon z kodem logowania | `wgctl totp off admin` |
 | `wgctl`: „jesteś już w grupie wg-panel, ale ta sesja…" | wyloguj się i zaloguj ponownie albo `newgrp wg-panel` |

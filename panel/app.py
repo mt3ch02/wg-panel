@@ -1791,6 +1791,27 @@ def get_api_peers(req: Request) -> Response:
     return Response(json.dumps(payload), content_type="application/json; charset=utf-8")
 
 
+def chart_json(series: list, title: str) -> Response:
+    """Wnetrze karty wykresu dla strony, ktora otwarto, zanim byly dane (ui.wgChartWatch)."""
+    ready = ui.chart_ready(series)
+    payload = {"ready": ready, "html": ui.chart_body(series, title, db.settings(CONN)) if ready else ""}
+    return Response(json.dumps(payload), content_type="application/json; charset=utf-8")
+
+
+@route("GET", "/api/chart")
+def get_api_chart(req: Request) -> Response:
+    return chart_json(traffic.hourly(CONN, None, 7), _("Ruch w tunelu - ostatnie 7 dni"))
+
+
+@route("GET", r"/api/peers/(\d+)/chart")
+def get_api_peer_chart(req: Request, peer_id: str) -> Response:
+    peer = db.peer(CONN, int(peer_id))
+    if not peer:
+        return Response(json.dumps({"ready": False, "html": ""}), 404,
+                        content_type="application/json; charset=utf-8")
+    return chart_json(traffic.hourly(CONN, peer["pubkey"], 7), _("Ruch - ostatnie 7 dni"))
+
+
 def refresh_server_pubkey() -> str:
     """Klucz publiczny serwera prosto z helpera (z klucza prywatnego na tym Pi).
 

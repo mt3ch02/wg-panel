@@ -362,6 +362,21 @@ check("dni sprzed historii: „brak danych”, a nie zera", blank.count("brak da
 quiet = ui.traffic_chart([dict(p, rx=0, tx=0, nodata=False) for p in series], "Ruch")
 check("dzień z historią bez ruchu: „brak ruchu”", quiet.count("brak ruchu") == 7)
 
+# karta wykresu: zawsze jest, bez danych z notka (liczba minut z ustawien), wykres dochodzi sam
+wait = ui.chart_card([dict(p, rx=0, tx=0) for p in series], "Ruch", "/api/chart",
+                     {"traffic_sample_minutes": "5"})
+check("karta bez danych ma notke z liczba minut z ustawien",
+      'data-chart-ready="0"' in wait and "co 5 minut. Wykres pojawi się, gdy zbierze pierwsze dwie." in wait
+      and "pierwszej godzinie" not in wait and "<svg" not in wait)
+check("karta bez danych wie, skad dociagnac wykres", 'data-chart-src="/api/chart"' in wait)
+check("notka: odmiana minut", ui.chart_body([], "R", {"traffic_sample_minutes": "1"}).count("co minutę") == 1
+      and "co 2 minuty" in ui.chart_body([], "R", {"traffic_sample_minutes": "2"})
+      and "co 12 minut" in ui.chart_body([], "R", {"traffic_sample_minutes": "12"}))
+full = ui.chart_card(series, "Ruch", "/api/chart", {})
+check("karta z danymi ma wykres", 'data-chart-ready="1"' in full and "<svg" in full)
+check("handshake z przyszlosci (zegar) to nie ujemny czas",
+      ui._handshake(int(time.time()) + 120)[0] == "0 s temu")
+
 # wlasne nazwy urzadzen: etykiety z ustawien, w kopii razem z reszta ustawien
 from panel import names  # noqa: E402
 check("nazwa: pusta wraca do domyslnej", names.clean("  ", "name_storage") == names.DEFAULTS["name_storage"])

@@ -751,8 +751,14 @@ EN.update({
         'Add another peer',
     'adres IPv6':
         'IPv6 address',
-    'Brak danych. Próbki zbierane są co kilka minut, wykres pojawi się po pierwszej godzinie ruchu.':
-        'No data yet. Samples are collected every few minutes; the chart appears after the first hour of traffic.',
+    'Panel zbiera próbki ruchu co {every}. Wykres pojawi się, gdy zbierze pierwsze dwie.':
+        'The panel samples traffic every {every}. The chart appears once it has the first two samples.',
+    'minutę':
+        'minute',
+    '{n} minuty':
+        '{n} minutes',
+    '{n} minut':
+        '{n} minutes',
     'ustawione u tej osoby':
         'set for this person',
     'z tieru {tier}':

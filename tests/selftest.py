@@ -545,6 +545,34 @@ try:
     status, html, _ = request("/")
     check("lista peerow odswieza sie sama", "wgPoll" in html and "setInterval" in html)
 
+    check("lista liczy czas wedlug zegara serwera, nie komputera",
+          "WG_SKEW" in html and "Math.max(0, now - seconds)" in html)
+    check("karta wykresu jest na liscie zawsze", 'data-chart-src="/api/chart"' in html)
+    first_peer = data["peers"][0]["id"]
+    pub = conn.execute("SELECT pubkey FROM peers WHERE id = ?", (first_peer,)).fetchone()["pubkey"]
+    with conn:
+        conn.execute("DELETE FROM traffic")
+    status, html_p, _ = request(f"/peers/{first_peer}")
+    check("strona peera bez danych: nowa notka zamiast „pierwszej godziny”",
+          "Wykres pojawi się, gdy zbierze pierwsze dwie." in html_p and "pierwszej godzinie" not in html_p
+          and f'data-chart-src="/api/peers/{first_peer}/chart"' in html_p, html_p[-400:])
+    status, body, _ = request("/api/chart")
+    check("bez probek wykres jeszcze niegotowy", json.loads(body)["ready"] is False, body[:200])
+    t0 = int(time.time()) - 600
+    with conn:
+        conn.executemany("INSERT INTO traffic(ts, pubkey, rx, tx) VALUES (?, ?, ?, ?)",
+                         [(t0, pub, 1000, 2000), (t0 + 300, pub, 50000, 900000)])
+    status, body, _ = request("/api/chart")
+    got = json.loads(body)
+    check("po dwoch probkach z ruchem /api/chart oddaje wykres", got["ready"] and "<svg" in got["html"],
+          body[:200])
+    status, body, _ = request(f"/api/peers/{first_peer}/chart")
+    got = json.loads(body)
+    check("to samo dla strony peera", got["ready"] and "<svg" in got["html"], body[:200])
+    check("nieznany peer: 404", request("/api/peers/999999/chart")[0] == 404)
+    with conn:
+        conn.execute("DELETE FROM traffic")
+
     print("\n11c. Odrzucanie zmian i dziennik")
     import panel.model as pmodel
     pmodel.mark_applied(conn, pmodel.build(conn), {})
