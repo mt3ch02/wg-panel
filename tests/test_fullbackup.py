@@ -320,7 +320,10 @@ try:
         os.remove(os.path.join(CA_DIR, name))
     answers = {"WGPANEL_RESTORE_HOST": "127.0.0.1", "WGPANEL_RESTORE_SHARE": "backup",
                "WGPANEL_RESTORE_PATH": "nasbackup", "WGPANEL_RESTORE_USER": "nasbackup",
-               "WGPANEL_RESTORE_PASS": "tajne", "WGPANEL_RESTORE_PASSPHRASE": "dlugie-haslo-kopii"}
+               "WGPANEL_RESTORE_PASS": "tajne", "WGPANEL_RESTORE_PASSPHRASE": "dlugie-haslo-kopii",
+               # nigdy nie zmieniamy nazwy systemu, na ktorym biegna testy; adres jak w kopii
+               "WGPANEL_RESTORE_HOSTNAME": "n",
+               "WGPANEL_RESTORE_LOCAL_IPS": db.settings(conn).get("server_lan") or ""}
     names = export.list_smb(db.settings(conn))
     pick = str(names.index(full_name) + 1)
 
@@ -357,8 +360,20 @@ try:
 
     cli("fetch", out_file, WGPANEL_RESTORE_PICK=pick)
     target_db = os.path.join(TMP, "installed.db")
-    result = cli("import", out_file, WGPANEL_DB=target_db)
+    machine = {"server_lan": "10.0.2.15", "lan": "10.0.2.0/24", "wan_if": "enp0s3"}
+    result = cli("import", out_file, WGPANEL_DB=target_db, WGPANEL_DETECT=json.dumps(machine))
     check("import do nowej bazy", result.returncode == 0, result.stdout + result.stderr)
+    imported = dict(sqlite3.connect(target_db).execute(
+        "SELECT key, value FROM settings WHERE key IN ('server_lan', 'lan', 'wan_if')").fetchall())
+    check("import na innej maszynie: adres, interfejs i sieć z maszyny, nie z kopii",
+          imported == machine and "wzięte z tej maszyny" in result.stdout, str(imported) + result.stdout)
+    test_db = os.path.join(TMP, "testowy.db")
+    result = cli("import", out_file, "--test", WGPANEL_DB=test_db, WGPANEL_DETECT=json.dumps(machine))
+    check("import --test: serwer testowy", result.returncode == 0 and "Serwer TESTOWY" in result.stdout
+          and sqlite3.connect(test_db).execute("SELECT value FROM settings WHERE key='test_mode'").fetchone()[0] == "1",
+          result.stdout + result.stderr)
+    check("zwykły import: właściwy serwer", sqlite3.connect(target_db).execute(
+        "SELECT value FROM settings WHERE key='test_mode'").fetchone()[0] == "0")
     installed = sqlite3.connect(target_db)
     check("import: osoby, konta, hasła", [r[0] for r in installed.execute("SELECT name FROM peers ORDER BY ip")]
           == ["Ja", "Anna"] and installed.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
@@ -368,6 +383,88 @@ try:
           result.stdout + result.stderr)
     conf = open(os.path.join(WGDIR, "wg0.conf"), encoding="utf8").read()
     check("wg0.conf z kluczem z kopii i osobami", OLD_KEY in conf and "J" * 43 + "=" in conf)
+
+    print("\n3b. Kopia z pliku, próba odtworzenia, opcje instalatora")
+    install_conf = os.path.join(TMP, "install.conf")
+    with open(install_conf, "w", encoding="utf8") as handle:
+        handle.write("# opcje\nLAN_ACCESS=192.168.50.0/24\nBIND_PORT=8443\nTLS=1\nINSTALL_LANG=pl\n"
+                     "BIND_HOST=10.0.0.1\nCOS_INNEGO=x\n")
+    export.INSTALL_CONF = install_conf
+    blob, encrypted, kind = export.pack(conn, "dlugie-haslo-kopii")
+    data = export.parse(blob, "dlugie-haslo-kopii")
+    check("pełna kopia niesie opcje instalatora (tylko znane klucze)",
+          data.get("install") == {"LAN_ACCESS": "192.168.50.0/24", "BIND_PORT": "8443", "TLS": "1",
+                                  "INSTALL_LANG": "pl", "BIND_HOST": "10.0.0.1"}, str(data.get("install")))
+    check("pełna kopia niesie nazwę serwera", data.get("host") == {"name": export.host_name()}, str(data.get("host")))
+    basic = export.parse(export.pack(conn, "")[0])
+    check("kopia podstawowa bez opcji i nazwy (jak dotąd)", "install" not in basic and "host" not in basic)
+    local = os.path.join(TMP, "z-pendrive", "wg-panel-kopia.json.enc")
+    os.makedirs(os.path.dirname(local))
+    open(local, "wb").write(blob)
+    open(local + ".sha256", "w").write(f"{export.sha256(blob)}  {os.path.basename(local)}\n")
+
+    before = {name: open(os.path.join(WGDIR, name), "rb").read() for name in ("server_private.key",)}
+    listing = sorted(os.listdir(WGDIR)), sorted(os.listdir(CA_DIR))
+    result = cli("check", local)
+    check("próba: pokazuje wersję panelu z kopii", "wersja panelu" in result.stdout
+          and open(os.path.join(ROOT, "VERSION")).read().strip() in result.stdout, result.stdout)
+    check("próba z pliku: kod 0, opis zawartości", result.returncode == 0 and "8443" in result.stdout
+          and "pełna" in result.stdout and "tak" in result.stdout and "Nic nie zostało zmienione" in result.stdout,
+          result.stdout + result.stderr)
+    check("próba niczego nie zapisuje", (sorted(os.listdir(WGDIR)), sorted(os.listdir(CA_DIR))) == listing
+          and all(open(os.path.join(WGDIR, n), "rb").read() == v for n, v in before.items()))
+    result = cli("check", local, WGPANEL_RESTORE_PASSPHRASE="zle-haslo")
+    check("próba ze złym hasłem: kod 1, po ludzku", result.returncode == 1
+          and "nie udało się otworzyć kopii" in result.stderr, result.stderr)
+    result = cli("check", WGPANEL_RESTORE_PICK=pick)
+    check("próba z udziału NAS (bez pliku)", result.returncode == 0 and "Nic nie zostało zmienione" in result.stdout,
+          result.stdout + result.stderr)
+    result = cli("check", os.path.join(TMP, "nie-ma.enc"))
+    check("próba: brak pliku - kod 1", result.returncode == 1 and "nie ma pliku" in result.stderr, result.stderr)
+    bad = os.path.join(TMP, "z-pendrive", "uszkodzona.json.enc")
+    open(bad, "wb").write(blob[:-5] + b"xxxxx")
+    open(bad + ".sha256", "w").write(f"{export.sha256(blob)}  uszkodzona.json.enc\n")
+    result = cli("check", bad)
+    check("uszkodzony plik (suma .sha256 obok się nie zgadza): kod 1", result.returncode == 1
+          and "suma kontrolna" in result.stderr, result.stderr)
+
+    out_file = os.path.join(TMP, "restore2.json")
+    result = cli("fetch", out_file, local)
+    check("fetch z pliku: kod 0, bez pytań o udział", result.returncode == 0 and "Kopia z pliku" in result.stdout
+          and "Adres NAS" not in result.stdout, result.stdout + result.stderr)
+    options = open(out_file + ".options", encoding="utf8").read()
+    check("fetch: opcje instalatora dla install.sh (plik tylko dla właściciela)",
+          "BIND_PORT=8443\n" in options and "LAN_ACCESS=192.168.50.0/24\n" in options and "COS_INNEGO" not in options
+          and oct(os.stat(out_file + ".options").st_mode)[-3:] == "600", options)
+    check("fetch: plik dla importu bez opcji i nazwy", not {"install", "host", "system"} & set(json.load(open(out_file))))
+
+    real_host = export.host_name
+    export.host_name = lambda: "stary-pi"
+    try:
+        other = export.pack(conn, "dlugie-haslo-kopii")[0]
+    finally:
+        export.host_name = real_host
+    other_path = os.path.join(TMP, "z-pendrive", "z-innego-pi.json.enc")
+    open(other_path, "wb").write(other)
+    result = cli("check", other_path, WGPANEL_RESTORE_LOCAL_IPS="192.168.50.99")
+    check("próba: inna nazwa serwera - ostrzega o ca.crt", 'nazwie "stary-pi"' in result.stdout
+          and "ca.crt" in result.stdout, result.stdout)
+    server_lan = db.settings(conn).get("server_lan")
+    check("próba: inny adres w LAN - mówi, co zrobić", f"adres serwera w LAN to {server_lan}" in result.stdout
+          and "192.168.50.99" in result.stdout and "rezerwację DHCP" in result.stdout, result.stdout)
+    result = cli("fetch", out_file, other_path)
+    check("fetch: inna nazwa - pyta o ustawienie nazwy (odpowiedź n: bez zmian)",
+          result.returncode == 0 and "Nazwa zostaje" in result.stdout
+          and "Nazwa ustawiona" not in result.stdout, result.stdout)
+    old_style = dict(data)
+    old_style.pop("host")
+    old_style["system"] = dict(old_style["system"], ca=dict(old_style["system"]["ca"], json='{"dns": ["dawny"]}'))
+    from panel import restore_cli
+    check("starsza kopia (bez nazwy): nazwa z urzędu certyfikacji", restore_cli.backup_host(old_style) == "dawny")
+    no_ca = dict(data, host={"name": "inny"}, system=dict(data["system"], ca=None))
+    os.environ["WGPANEL_RESTORE_LOCAL_IPS"] = server_lan or ""
+    check("kopia bez urzędu: nazwa nie ma znaczenia", "host" not in restore_cli.differences(no_ca))
+    del os.environ["WGPANEL_RESTORE_LOCAL_IPS"]
 
     print("\n4. Instalator: pytanie o klucz serwera")
     source = open(os.path.join(ROOT, "install.sh"), encoding="utf8").read()

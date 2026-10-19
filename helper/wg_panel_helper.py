@@ -655,6 +655,47 @@ def ensure_base(cfg: dict) -> list[str]:
     if run(["systemctl", "is-enabled", unit]).stdout.strip() != "enabled":
         run(["systemctl", "enable", unit])
         steps.append(f"{unit}: wlaczony przy starcie systemu")
+    steps += ufw_wireguard(cfg["listen_port"])
+    return steps
+
+
+UFW_COMMENT = "wg-panel WireGuard"
+
+
+def ufw_wireguard(port: str) -> list[str]:
+    """Port WireGuarda w ufw: regula z komentarzem panelu dla obecnego portu, bez starych.
+
+    Bez niej, przy wlaczonym ufw, klienci nie dobija sie do serwera - na nowym systemie trzeba
+    bylo pamietac o recznym "ufw allow PORT/udp". Wlasnych regul uzytkownika nie ruszamy.
+    Regula zostaje takze po odinstalowaniu panelu - VPN dziala dalej (uninstall.sh)."""
+    if shutil.which("ufw") is None:
+        return []
+    listed = run(["ufw", "status", "numbered"])
+    if listed.returncode != 0:
+        return [f"ufw: nie odczytano regul: {listed.stderr.strip()}"]
+    want = f"{port}/udp"
+    keep, stale = False, []
+    for line in listed.stdout.splitlines():
+        if not line.rstrip().endswith("# " + UFW_COMMENT):
+            continue
+        match = re.match(r"\[\s*(\d+)\]\s+(\S+)", line)
+        if not match:
+            continue
+        if match.group(2) == want:
+            keep = True
+        else:
+            stale.append(int(match.group(1)))
+    steps = []
+    # od konca - po usunieciu numery kolejnych regul sie przesuwaja
+    for number in sorted(stale, reverse=True):
+        run(["ufw", "--force", "delete", str(number)])
+    if stale:
+        steps.append("ufw: usunieto regule starego portu WireGuarda")
+    if not keep:
+        result = run(["ufw", "allow", want, "comment", UFW_COMMENT])
+        if result.returncode != 0:
+            return steps + [f"ufw: nie otwarto portu {want}: {result.stderr.strip()}"]
+        steps.append(f"ufw: otwarto port WireGuarda {want}")
     return steps
 
 

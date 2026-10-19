@@ -8,9 +8,20 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 
 # --- opcje instalacji ---
 # Pierwsza instalacja zapisuje je w $CONF, aktualizacja to potem samo "sudo ./install.sh".
-# Opcja podana jawnie wygrywa (tak sie ja zmienia), takze pusta: LAN_ACCESS= wylacza dostep z LAN.
+# Opcja podana jawnie wygrywa (tak sie ja zmienia). Dostep z LAN jest domyslnie wlaczony przy
+# NOWEJ instalacji (LAN_ACCESS=auto - siec tego serwera); wylacza go LAN_ACCESS=off (albo jawnie
+# pusta: LAN_ACCESS=). Aktualizacja i odtworzenie z kopii zachowuja wczesniejszy wybor.
 # Plik nalezy do roota - konto panelu nie moze zmienic tego, co instalator zrobi jako root.
 CONF="${WGPANEL_CONF:-/etc/wg-panel/install.conf}"
+# opcje podane jawnie w tym uruchomieniu - wygrywaja tez z opcjami z odtwarzanej kopii
+EXPLICIT=" "
+for option in LAN_ACCESS BIND_PORT TLS INSTALL_LANG BIND_HOST; do
+    [ -n "${!option+x}" ] && EXPLICIT="$EXPLICIT$option "
+done
+# jawnie pusta LAN_ACCESS= to swiadome wylaczenie - zapamietujemy je jako "off". Pusta wartosc
+# z pliku opcji albo z kopii to tez "off": starsze wersje zapisywaly tak "tylko przez VPN" (wtedy
+# domyslne) - aktualizacja nie moze po cichu otworzyc panelu na siec domowa.
+if [ -n "${LAN_ACCESS+x}" ] && [ -z "$LAN_ACCESS" ]; then LAN_ACCESS=off; fi
 UNIT_FILE="${WGPANEL_UNIT:-/etc/systemd/system/wg-panel.service}"
 OPTIONS_FROM=""
 saved_option() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tail -n 1; }
@@ -21,6 +32,7 @@ if [ -f "$CONF" ]; then
     [ -n "${TLS+x}" ] || TLS="$(saved_option TLS)"
     [ -n "${INSTALL_LANG+x}" ] || INSTALL_LANG="$(saved_option INSTALL_LANG)"
     [ -n "${BIND_HOST+x}" ] || BIND_HOST="$(saved_option BIND_HOST)"
+    [ -n "$LAN_ACCESS" ] || LAN_ACCESS=off
     OPTIONS_FROM="$CONF"
 elif [ -f "$UNIT_FILE" ]; then
     # panel ze starszej wersji (bez pliku opcji): to, co jest w zainstalowanej usludze
@@ -30,6 +42,9 @@ elif [ -f "$UNIT_FILE" ]; then
         # dostep z LAN byl wlaczony - siec bierzemy z reguly zapory albo z ustawien panelu
         LAN_ACCESS="$(ufw status 2>/dev/null | sed -n 's|.*ALLOW[[:space:]]*\([0-9./]*\)[[:space:]]*# wg-panel LAN.*|\1|p' | head -n 1)"
         [ -n "$LAN_ACCESS" ] || LAN_ACCESS="$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DATA/panel.db?mode=ro', uri=True).execute(\"SELECT value FROM settings WHERE key='lan'\").fetchone()[0])" 2>/dev/null || true)"
+        [ -n "$LAN_ACCESS" ] || LAN_ACCESS=auto     # byl wlaczony, sieci nie odczytalismy
+    elif [ -z "${LAN_ACCESS+x}" ]; then
+        LAN_ACCESS=off      # usluga sluchala tylko na VPN - tak zostaje
     fi
     if [ -z "${BIND_HOST+x}" ]; then
         # adres panelu w VPN: z uslugi, a przy dostepie z LAN (0.0.0.0) - adres serwera z ustawien
@@ -42,21 +57,34 @@ elif [ -f "$UNIT_FILE" ]; then
 fi
 # --- koniec opcji instalacji ---
 
-# LAN_ACCESS=192.168.1.0/24 - panel dostepny takze z sieci domowej
-LAN_ACCESS="${LAN_ACCESS:-}"
 # BIND_HOST=10.8.0.1 - adres panelu w VPN, gdy siec VPN jest inna niz 10.0.0.0/24 (zapamietywany)
-VPN_HOST="${BIND_HOST:-10.0.0.1}"
-BIND_HOST="$VPN_HOST"
-# z dostepem z LAN panel nasluchuje na wszystkich adresach, a wpuszcza zapora
-[ -n "$LAN_ACCESS" ] && BIND_HOST="0.0.0.0"
-BIND_PORT="${BIND_PORT:-8080}"
-# TLS=0 ./install.sh - panel bez HTTPS (domyslnie HTTPS z wlasnego urzedu certyfikacji)
-TLS="${TLS:-1}"
-# jezyk komunikatow: INSTALL_LANG=pl ./install.sh - polski; domyslnie angielski.
-case "${INSTALL_LANG:-en}" in
-    en*|EN*) UI=en ;;
-    *) UI=pl ;;
-esac
+VPN_HOST="${BIND_HOST:-}"
+# czy panel ma byc dostepny z LAN (LAN_ACCESS to wtedy konkretna siec)
+lan_on() { [ -n "$LAN_ACCESS" ] && [ "$LAN_ACCESS" != off ] && [ "$LAN_ACCESS" != auto ]; }
+# co pokazac i zapamietac: "off" zamiast pustej wartosci
+lan_label() { if lan_on; then printf '%s' "$LAN_ACCESS"; else t "nie" "no"; fi; }
+derive_options() {
+    # LAN_ACCESS - siec, z ktorej poza VPN wolno otworzyc panel:
+    #   auto (domyslnie) - siec tego serwera, 192.168.1.0/24 - podana wprost, off - tylko VPN
+    LAN_ACCESS="${LAN_ACCESS:-auto}"
+    case "$LAN_ACCESS" in
+        off|OFF|no|NO|none|0|false) LAN_ACCESS=off ;;
+        AUTO|yes|YES|1|true|on) LAN_ACCESS=auto ;;
+    esac
+    VPN_HOST="${VPN_HOST:-10.0.0.1}"
+    BIND_HOST="$VPN_HOST"
+    # z dostepem z LAN panel nasluchuje na wszystkich adresach, a wpuszcza zapora
+    lan_on && BIND_HOST="0.0.0.0"
+    BIND_PORT="${BIND_PORT:-8080}"
+    # TLS=0 ./install.sh - panel bez HTTPS (domyslnie HTTPS z wlasnego urzedu certyfikacji)
+    TLS="${TLS:-1}"
+    # jezyk komunikatow: INSTALL_LANG=pl ./install.sh - polski; domyslnie angielski.
+    case "${INSTALL_LANG:-en}" in
+        en*|EN*) UI=en ;;
+        *) UI=pl ;;
+    esac
+}
+derive_options
 # t "polski" "english" - tekst w wybranym jezyku
 t() { if [ "$UI" = en ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 
@@ -64,26 +92,101 @@ t() { if [ "$UI" = en ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 case " $* " in
     *" --uninstall "*) exec bash "$SRC/uninstall.sh" "$@" ;;
 esac
-# odtworzenie calego Pi z pelnej kopii na NAS: sudo ./install.sh --restore
+# odtworzenie calego serwera z pelnej kopii: sudo ./install.sh --restore [PLIK_KOPII]
+#   bez pliku - kopia z udzialu NAS (instalator pyta o dane i pokazuje liste)
+#   --check   - proba: pobiera, sprawdza i opisuje kopie, niczego nie zmienia
+#   --test    - odtworzenie na maszynie testowej: bez kopii automatycznych, powiadomien
+#               i wydawania plikow osob (wylaczasz w panelu albo: wgctl test off)
 RESTORE=0
-case " $* " in
-    *" --restore "*) RESTORE=1 ;;
-esac
+RESTORE_SRC=""
+CHECK=0
+TEST=0
+ARGS=("$@")
+for ((i = 0; i < ${#ARGS[@]}; i++)); do
+    case "${ARGS[$i]}" in
+        --restore)
+            RESTORE=1
+            next="${ARGS[$((i + 1))]:-}"
+            if [ -n "$next" ] && [ "${next#--}" = "$next" ]; then
+                RESTORE_SRC="$next"
+                i=$((i + 1))
+            fi
+            ;;
+        --check) CHECK=1 ;;
+        --test) TEST=1 ;;
+    esac
+done
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$1"; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$1" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "$(t "uruchom przez sudo" "run it with sudo")"
+NEW_VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo "?")"
+info "$(t "wg-panel $NEW_VERSION" "wg-panel $NEW_VERSION")"
+
+# dostep z LAN dopasowany do tego serwera: LAN_ACCESS=auto to siec, w ktorej serwer stoi;
+# siec zapamietana albo z kopii, ktora nie pasuje do zadnej sieci serwera (kopia z innego
+# komputera, przeprowadzka) tez zamienia sie na siec serwera. Jawnie podanej sieci nie ruszamy.
+LAN_SAVE=""
+fit_lan_access() {
+    LAN_SAVE="$LAN_ACCESS"
+    [ "$LAN_ACCESS" != off ] || return 0
+    if [ "$LAN_ACCESS" != auto ]; then
+        case "$EXPLICIT" in *" LAN_ACCESS "*) return 0 ;; esac
+    fi
+    local fitted
+    fitted="$(PYTHONPATH="$SRC" python3 -m panel.firstrun --fit-lan "$LAN_ACCESS" 2>/dev/null)" || fitted=""
+    [ "$fitted" = "$LAN_ACCESS" ] && return 0
+    if [ "$LAN_ACCESS" = auto ] && [ -n "$fitted" ]; then
+        info "$(t "Dostęp z LAN: sieć tego serwera ($fitted)" "LAN access: this server's network ($fitted)")"
+    elif [ "$LAN_ACCESS" = auto ]; then
+        warn "$(t "Nie wykryłem sieci tego serwera - panel tylko przez VPN i tunel SSH (podaj LAN_ACCESS=SIEĆ, np. 192.168.1.0/24)" "Couldn't detect this server's network - panel through the VPN and an SSH tunnel only (give LAN_ACCESS=NETWORK, e.g. 192.168.1.0/24)")"
+        # "auto" zostaje zapamietane - nastepne uruchomienie sprobuje wykryc siec jeszcze raz
+        LAN_ACCESS=off
+        derive_options
+        return 0
+    elif [ -z "$fitted" ]; then
+        return 0
+    else
+        warn "$(t "Dostęp z LAN: $LAN_ACCESS nie pasuje do żadnej sieci tego serwera - biorę jego sieć $fitted" "LAN access: $LAN_ACCESS doesn't match any network of this server - using its network $fitted")"
+    fi
+    LAN_ACCESS="$fitted"
+    LAN_SAVE="$fitted"
+    derive_options
+}
 
 # opcje (takze te zapamietane) - zanim cokolwiek zmienimy
-if [ -n "$LAN_ACCESS" ] && ! [[ "$LAN_ACCESS" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]]; then
-    die "$(t "LAN_ACCESS ma być siecią, np. 192.168.1.0/24 (jest: $LAN_ACCESS)" "LAN_ACCESS must be a network, e.g. 192.168.1.0/24 (got: $LAN_ACCESS)")"
+validate_options() {
+    if lan_on && ! [[ "$LAN_ACCESS" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]]; then
+        die "$(t "LAN_ACCESS ma być siecią, np. 192.168.1.0/24 (jest: $LAN_ACCESS)" "LAN_ACCESS must be a network, e.g. 192.168.1.0/24 (got: $LAN_ACCESS)")"
+    fi
+    [[ "$BIND_PORT" =~ ^[0-9]{2,5}$ ]] || die "$(t "BIND_PORT ma być numerem portu (jest: $BIND_PORT)" "BIND_PORT must be a port number (got: $BIND_PORT)")"
+    [[ "$TLS" =~ ^[01]$ ]] || die "$(t "TLS ma być 0 albo 1 (jest: $TLS)" "TLS must be 0 or 1 (got: $TLS)")"
+    [[ "$VPN_HOST" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "$(t "BIND_HOST ma być adresem IPv4 (jest: $VPN_HOST)" "BIND_HOST must be an IPv4 address (got: $VPN_HOST)")"
+}
+fit_lan_access
+validate_options
+
+# --restore: plik kopii podany sciezka - sprawdzamy od razu, zanim cokolwiek zmienimy
+if [ -n "$RESTORE_SRC" ]; then
+    [ -f "$RESTORE_SRC" ] || die "$(t "nie ma pliku kopii: $RESTORE_SRC" "no such backup file: $RESTORE_SRC")"
+    RESTORE_SRC="$(readlink -f "$RESTORE_SRC")"
 fi
-[[ "$BIND_PORT" =~ ^[0-9]{2,5}$ ]] || die "$(t "BIND_PORT ma być numerem portu (jest: $BIND_PORT)" "BIND_PORT must be a port number (got: $BIND_PORT)")"
-[[ "$TLS" =~ ^[01]$ ]] || die "$(t "TLS ma być 0 albo 1 (jest: $TLS)" "TLS must be 0 or 1 (got: $TLS)")"
+if [ "$TEST" = 1 ] && [ "$RESTORE" != 1 ]; then
+    die "$(t "--test działa razem z --restore: sudo ./install.sh --restore --test [PLIK]" "--test works together with --restore: sudo ./install.sh --restore --test [FILE]")"
+fi
+if [ "$CHECK" = 1 ]; then
+    [ "$RESTORE" = 1 ] || die "$(t "--check działa razem z --restore: sudo ./install.sh --restore --check [PLIK]" "--check works together with --restore: sudo ./install.sh --restore --check [FILE]")"
+    if [ -z "$RESTORE_SRC" ] && ! command -v smbclient >/dev/null; then
+        die "$(t "brak smbclient - sudo apt install smbclient (albo podaj plik kopii)" "smbclient is missing - sudo apt install smbclient (or give a backup file)")"
+    fi
+    info "$(t "Próba odtworzenia - nic nie zostanie zmienione" "Restore check - nothing will be changed")"
+    PYTHONPATH="$SRC" INSTALL_LANG="$UI" python3 -m panel.restore_cli check "$RESTORE_SRC"
+    exit $?
+fi
 if [ -n "$OPTIONS_FROM" ]; then
-    info "$(t "Opcje z poprzedniej instalacji ($OPTIONS_FROM): dostęp z LAN: ${LAN_ACCESS:-nie}, port $BIND_PORT, HTTPS: $TLS" "Options from the previous install ($OPTIONS_FROM): LAN access: ${LAN_ACCESS:-no}, port $BIND_PORT, HTTPS: $TLS")"
+    info "$(t "Opcje z poprzedniej instalacji ($OPTIONS_FROM): dostęp z LAN: $(lan_label), port $BIND_PORT, HTTPS: $TLS" "Options from the previous install ($OPTIONS_FROM): LAN access: $(lan_label), port $BIND_PORT, HTTPS: $TLS")"
 fi
 
 info "$(t "Sprawdzam zależności" "Checking dependencies")"
@@ -180,18 +283,41 @@ RESTORE_FILE="$DATA/restore.json"
 RESTORE_FULL=0
 if [ "$RESTORE" = 1 ]; then
     [ -f /etc/wireguard/wg0.conf ] && die "$(t "--restore jest dla czystego systemu, a tu już działa VPN (/etc/wireguard/wg0.conf). Odtwórz kopię w panelu: Kopie - Odtwórz." "--restore is for a clean system, but a VPN already runs here (/etc/wireguard/wg0.conf). Restore the backup in the panel: Backups - Restore.")"
-    info "$(t "Odtwarzanie z pełnej kopii na NAS" "Restoring from a full backup on a NAS")"
-    command -v smbclient >/dev/null || die "$(t "brak smbclient - sudo apt install smbclient" "smbclient is missing - sudo apt install smbclient")"
+    if [ -n "$RESTORE_SRC" ]; then
+        info "$(t "Odtwarzanie z pliku kopii" "Restoring from a backup file")"
+    else
+        info "$(t "Odtwarzanie z pełnej kopii na NAS" "Restoring from a full backup on a NAS")"
+        command -v smbclient >/dev/null || die "$(t "brak smbclient - sudo apt install smbclient" "smbclient is missing - sudo apt install smbclient")"
+    fi
     install -d -m 700 "$DATA"
     set +e
-    PYTHONPATH="$SRC" INSTALL_LANG="$UI" python3 -m panel.restore_cli fetch "$RESTORE_FILE"
+    PYTHONPATH="$SRC" INSTALL_LANG="$UI" python3 -m panel.restore_cli fetch "$RESTORE_FILE" "$RESTORE_SRC"
     FETCH_RC=$?
     set -e
     case "$FETCH_RC" in
         0) RESTORE_FULL=1 ;;
         3) ;;   # kopia bez klucza serwera - zapytamy o niego nizej
-        *) die "$(t "odtwarzanie przerwane - nic nie zostało zainstalowane" "restore aborted - nothing was installed")" ;;
+        *) rm -f "$RESTORE_FILE" "$RESTORE_FILE.options"
+           die "$(t "odtwarzanie przerwane - nic nie zostało zainstalowane" "restore aborted - nothing was installed")" ;;
     esac
+    # opcje instalatora z kopii (dostep z LAN, port, HTTPS, jezyk) - poza podanymi jawnie
+    if [ -s "$RESTORE_FILE.options" ]; then
+        while IFS='=' read -r key value; do
+            case "$EXPLICIT" in *" $key "*) continue ;; esac
+            case "$key" in
+                LAN_ACCESS) LAN_ACCESS="${value:-off}" ;;   # pusta w kopii = "tylko VPN"
+                BIND_PORT) BIND_PORT="$value" ;;
+                TLS) TLS="$value" ;;
+                INSTALL_LANG) INSTALL_LANG="$value" ;;
+                BIND_HOST) VPN_HOST="$value" ;;
+            esac
+        done < "$RESTORE_FILE.options"
+        derive_options
+        fit_lan_access
+        validate_options
+        info "$(t "Opcje instalacji z kopii: dostęp z LAN: $(lan_label), port $BIND_PORT, HTTPS: $TLS" "Install options from the backup: LAN access: $(lan_label), port $BIND_PORT, HTTPS: $TLS")"
+    fi
+    rm -f "$RESTORE_FILE.options"
 fi
 
 PATH_A=0
@@ -203,7 +329,9 @@ elif [ -f /etc/wireguard/wg0.conf ]; then
     PATH_A=1
     info "$(t "Wykryto istniejący /etc/wireguard/wg0.conf - ścieżka A (przejęcie konfiguracji)" "Found an existing /etc/wireguard/wg0.conf - path A (taking over the configuration)")"
     # droga powrotna (uninstall.sh --restore): stan sprzed panelu, zapisany tylko raz
+    # starsze wersje zapisywaly ten stan w /root/przed-wg-panel - jesli tam jest, zostaje tam
     BEFORE=/root/wg-panel-before
+    [ -f /root/przed-wg-panel/wg0.conf ] && BEFORE=/root/przed-wg-panel
     if [ ! -f "$BEFORE/wg0.conf" ]; then
         info "$(t "Zapisuję stan sprzed panelu w $BEFORE (droga powrotna)" "Saving the pre-panel state to $BEFORE (the way back)")"
         mkdir -p "$BEFORE"
@@ -238,12 +366,17 @@ fi
 # straznik wstrzymany na czas aktualizacji - inaczej zglosilby restart uslug jako awarie
 systemctl stop wg-panel-guard.timer 2>/dev/null || true
 
+OLD_VERSION="$(cat "$DEST/VERSION" 2>/dev/null || true)"
+if [ "$UPDATE" = 1 ]; then
+    info "$(t "Aktualizacja wg-panel: ${OLD_VERSION:-starsza niż 1.4.0} -> $NEW_VERSION" "Updating wg-panel: ${OLD_VERSION:-older than 1.4.0} -> $NEW_VERSION")"
+fi
 info "$(t "Kopiuję pliki do $DEST" "Copying files to $DEST")"
 mkdir -p "$DEST"
 rm -rf "$DEST/panel" "$DEST/helper"
 cp -r "$SRC/panel" "$SRC/helper" "$DEST/"
 install -m 755 "$SRC/wgctl" "$DEST/wgctl"
 install -m 755 "$SRC/uninstall.sh" "$DEST/uninstall.sh"
+install -m 644 "$SRC/VERSION" "$DEST/VERSION" 2>/dev/null || true
 cp "$SRC/README.md" "$DEST/" 2>/dev/null || true
 find "$DEST" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 chown -R root:root "$DEST"
@@ -284,7 +417,7 @@ if [ -f "$RESTORE_FILE" ]; then
     chown wg-panel:wg-panel "$RESTORE_FILE"
     chmod 600 "$RESTORE_FILE"
     runuser -u wg-panel -- env WGPANEL_DB="$DATA/panel.db" PYTHONPATH="$DEST" INSTALL_LANG="$UI" \
-        python3 -m panel.restore_cli import "$RESTORE_FILE" || die "$(t "nie udało się odtworzyć bazy" "could not restore the database")"
+        python3 -m panel.restore_cli import "$RESTORE_FILE" $([ "$TEST" = 1 ] && echo --test) || die "$(t "nie udało się odtworzyć bazy" "could not restore the database")"
 fi
 
 info "$(t "Instaluję polecenie wgctl" "Installing the wgctl command")"
@@ -344,7 +477,8 @@ chmod 755 "$(dirname "$CONF")"
 cat > "$CONF" <<OPTS
 # Opcje instalacji wg-panel. Aktualizacja (sudo ./install.sh) bierze je stad.
 # Zmiana: podaj opcje przy instalacji, np. sudo LAN_ACCESS=192.168.1.0/24 ./install.sh
-LAN_ACCESS=$LAN_ACCESS
+# LAN_ACCESS=off - panel tylko przez VPN i tunel SSH; auto - siec tego serwera
+LAN_ACCESS=${LAN_SAVE:-$LAN_ACCESS}
 BIND_PORT=$BIND_PORT
 TLS=$TLS
 INSTALL_LANG=$UI
@@ -361,7 +495,14 @@ if [ -f "$RESTORE_FILE" ]; then
 fi
 
 if command -v ufw >/dev/null; then
-    if [ -n "$LAN_ACCESS" ]; then
+    # reguly panelu dla innej sieci albo innego portu (zmiana sieci, przeprowadzka, kopia z innego
+    # komputera, wylaczony dostep z LAN) - od konca, numery kolejnych sie przesuwaja
+    for number in $(ufw status numbered 2>/dev/null | grep "# wg-panel LAN" \
+                    | grep -v -- "^\[ *[0-9]*\] $BIND_PORT/tcp .* ${LAN_ACCESS:-brak-dostepu-z-lan} " \
+                    | sed -n 's/^\[ *\([0-9][0-9]*\)\].*/\1/p' | sort -rn); do
+        ufw --force delete "$number" >/dev/null 2>&1 || true
+    done
+    if lan_on; then
         info "$(t "Dodaję regułę ufw dla panelu (z $LAN_ACCESS)" "Adding a ufw rule for the panel (from $LAN_ACCESS)")"
         ufw allow from "$LAN_ACCESS" to any port "$BIND_PORT" proto tcp comment 'wg-panel LAN' >/dev/null || true
     else
@@ -369,6 +510,13 @@ if command -v ufw >/dev/null; then
         ufw allow in on wg0 to any port "$BIND_PORT" proto tcp comment 'wg-panel' >/dev/null || true
     fi
     # przez VPN panel wpuszcza tylko osoby zaznaczone w panelu - decyduje lancuch WG-USERS-HOST
+    # port WireGuarda z ustawien panelu - bez niego, przy wlaczonym ufw, nikt sie nie polaczy;
+    # zmiane portu w panelu helper przenosi na zapore przy zastosowaniu zmian
+    WG_PORT="$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DATA/panel.db?mode=ro', uri=True).execute(\"SELECT value FROM settings WHERE key='listen_port'\").fetchone()[0])" 2>/dev/null || true)"
+    if [[ "$WG_PORT" =~ ^[0-9]{2,5}$ ]]; then
+        info "$(t "Otwieram w ufw port WireGuarda ($WG_PORT/udp)" "Opening the WireGuard port in ufw ($WG_PORT/udp)")"
+        ufw allow "$WG_PORT/udp" comment 'wg-panel WireGuard' >/dev/null || true
+    fi
 fi
 
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)"
@@ -396,7 +544,7 @@ $(t "HTTPS: certyfikat jeszcze nie powstał - sprawdź: journalctl -u wg-panel-h
     fi
 fi
 
-if [ -n "$LAN_ACCESS" ]; then
+if lan_on; then
     ACCESS_LINE="  $SCHEME://$LAN_IP:$BIND_PORT   - $(t "z sieci domowej" "from the home network")"
 else
     ACCESS_LINE="  ssh -L $BIND_PORT:127.0.0.1:$BIND_PORT $SUDO_USER@$LAN_IP   - $(t "potem" "then") http://localhost:$BIND_PORT"
@@ -452,7 +600,7 @@ fi
 if [ "$UI" = en ]; then
 cat <<EOF
 
-Done.
+Done. wg-panel $NEW_VERSION
 
 Panel:
 $ACCESS_LINE
@@ -468,9 +616,9 @@ File backups: /etc/wireguard/wg-panel-backups/
 
 Guard and access expiry run every minute (wg-panel-guard.timer), also when the panel is down.
 
-Update later: unpack the new package and run: sudo ./install.sh
+Update later: cd $SRC && git pull && sudo ./install.sh
   (the install options are remembered in $CONF)
-Uninstall: sudo /opt/wg-panel/uninstall.sh   (--purge, --restore - see docs/en/INSTALL.md)
+Uninstall: sudo /opt/wg-panel/uninstall.sh   (it asks what to remove - see docs/en/INSTALL.md)
 
 Logs, if something doesn't work (-f follows live, Ctrl+C ends the view):
   journalctl -u wg-panel -f
@@ -480,7 +628,7 @@ EOF
 else
 cat <<EOF
 
-Gotowe.
+Gotowe. wg-panel $NEW_VERSION
 
 Panel:
 $ACCESS_LINE
@@ -496,13 +644,17 @@ Kopie plików: /etc/wireguard/wg-panel-backups/
 
 Strażnik i terminy dostępu działają co minutę (wg-panel-guard.timer), także gdy panel leży.
 
-Aktualizacja w przyszłości: rozpakuj nową paczkę i uruchom: sudo ./install.sh
+Aktualizacja w przyszłości: cd $SRC && git pull && sudo ./install.sh
   (opcje instalacji są zapamiętane w $CONF)
-Odinstalowanie: sudo /opt/wg-panel/uninstall.sh   (--purge, --restore - opis w docs/pl/INSTALACJA.md)
+Odinstalowanie: sudo /opt/wg-panel/uninstall.sh   (zapyta, co usunąć - opis w docs/pl/INSTALACJA.md)
 
 Logi, gdyby coś nie działało (-f pokazuje na bieżąco, Ctrl+C kończy podgląd):
   journalctl -u wg-panel -f
   journalctl -u wg-panel-helper -f
   journalctl -u wg-panel-guard -n 20
 EOF
+fi
+
+if [ "$TEST" = 1 ]; then
+    warn "$(t "To jest SERWER TESTOWY: kopie automatyczne i powiadomienia wyłączone, pliki osób nie są wydawane. Właściwy serwer: przycisk w panelu albo wgctl test off." "This is a TEST SERVER: automatic backups and notifications are off, people's files are not issued. To make it the real server: the button in the panel or wgctl test off.")"
 fi

@@ -81,7 +81,10 @@ def weak_topic(url: str) -> bool:
 
 
 def send(cfg: dict, subject: str, message: str, severity: str = "warn", kind: str = "") -> bool:
-    """Glowny kanal (ntfy albo webhook) i - jesli wlaczony - e-mail, niezaleznie od siebie."""
+    """Glowny kanal (ntfy albo webhook) i - jesli wlaczony - e-mail, niezaleznie od siebie.
+    Serwer testowy niczego nie wysyla - alerty widac tylko w panelu (kanaly zostaja ustawione)."""
+    if cfg.get("test_mode") == "1":
+        return False
     # "znowu dziala" / "ustalo" tego samego rodzaju to informacja - nie budzi telefonu
     level = "critical" if kind in CRITICAL_KINDS and severity != "info" else severity
     sent = _send_channel(cfg, subject, message, level)

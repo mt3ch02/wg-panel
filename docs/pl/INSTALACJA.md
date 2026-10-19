@@ -95,7 +95,7 @@ Masz zobaczyć trzy pliki: `wg0.conf`, `iptables.rules`, `ufw.txt`.
 
 > **Dlaczego:** to Twoja droga powrotna. Gdyby panel Ci nie pasował, opcja `--restore` odinstalowania (część VI) przywraca dokładnie ten stan.
 
-> Instalator robi tę kopię sam, jeśli w `/root/wg-panel-before` jeszcze jej nie ma. Ręczna kopia przed instalacją nie zaszkodzi — instalator jej nie nadpisze.
+> Instalator robi tę kopię sam, jeśli w `/root/wg-panel-before` jeszcze jej nie ma. Ręczna kopia przed instalacją nie zaszkodzi — instalator jej nie nadpisze. Starsze wersje panelu zapisywały ją w `/root/przed-wg-panel` — jeśli masz taki katalog, instalator i odinstalowanie używają właśnie jego.
 
 ## Krok 3 — Zapisz klucz prywatny serwera poza Pi
 
@@ -169,17 +169,19 @@ ssh -L 8080:127.0.0.1:8080 pi@192.168.1.10
 
 Zostaw to okno otwarte i otwórz `http://localhost:8080` (przez tunel SSH zostaje zwykłe HTTP — ruch i tak idzie szyfrowanym SSH, a certyfikat nie obejmuje adresu `localhost`).
 
-**Albo dostęp z całej sieci domowej**, bez tunelu — wtedy instalujesz panel tak:
+**Dostęp z całej sieci domowej** jest przy nowej instalacji domyślnie włączony (`LAN_ACCESS=auto`) — zwykłe `sudo ./install.sh` już to robi. Aktualizacja zachowuje wcześniejszy wybór; żeby włączyć go później:
 
 ```bash
-sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh
+sudo INSTALL_LANG=pl LAN_ACCESS=auto ./install.sh
 ```
+
+`auto` bierze sieć, w której stoi Pi (możesz też podać ją wprost, np. `LAN_ACCESS=192.168.1.0/24`). Gdy zapamiętana sieć przestanie pasować do Pi — nowy router, kopia odtworzona na innym komputerze — instalator sam przejdzie na sieć Pi i usunie starą regułę zapory.
 
 Panel nasłuchuje wtedy na wszystkich adresach Pi, a wpuszcza go zapora — tylko z sieci domowej. Wchodzisz na `https://192.168.1.10:8080` (stary adres z `http://` sam przekieruje na `https://`). Z VPN panel otworzą wyłącznie osoby, którym to włączysz (Krok 12b).
 
 > **Czym to płacisz:** stronę logowania widzi każde urządzenie w Twoim Wi-Fi. Ruch jest szyfrowany (HTTPS), hasła nikt nie podejrzy, ale do czasu zainstalowania certyfikatu (Krok 7a) przeglądarka będzie ostrzegać. Chroni też blokada po pięciu nieudanych próbach logowania.
 
-> **Zmiana zdania później** to ponowne uruchomienie instalatora z `LAN_ACCESS` albo bez niego — dane i ustawienia zostają nietknięte.
+> **Zmiana zdania później** to ponowne uruchomienie instalatora z `LAN_ACCESS=off` (tylko VPN i tunel SSH) albo `LAN_ACCESS=auto` — dane i ustawienia zostają nietknięte.
 
 Masz zobaczyć stronę „Pierwsze uruchomienie".
 
@@ -220,7 +222,7 @@ Sieć domową, adres Pi i interfejs instalator wykrył sam. Sprawdź je i uzupe�
 | **Podsieć LAN** | Twoja sieć domowa, np. `192.168.1.0/24` — wykryte przy instalacji |
 | Podsieć VPN | sieć tunelu, np. `10.0.0.0/24` |
 | Adres serwera w VPN | adres Pi w tunelu, np. `10.0.0.1` |
-| **Adres serwera w LAN** | stały adres Pi, np. `192.168.1.10` — wykryte przy instalacji |
+| **Adres serwera w LAN** | adres Pi, np. `192.168.1.10` — tylko do odczytu: panel wykrywa go sam i idzie za nim, gdy się zmieni |
 | Interfejs WAN | interfejs Pi do internetu: `eth0`, `end0`, `wlan0`… — wykryte przy instalacji |
 | Port nasłuchu | port WireGuarda — domyślnie `51820`; jeśli router przekierowuje inny, popraw (na ścieżce A import w Kroku 11 i tak wpisze go z `wg0.conf`) |
 | DNS trybu full | np. `9.9.9.9` — Quad9: blokuje złośliwe domeny i nie profiluje zapytań |
@@ -468,6 +470,8 @@ sudo ufw status verbose
 
 Masz zobaczyć: `deny (incoming)`, reguła dla portu 22 z `192.168.1.0/24` i reguła dla `51820/udp`.
 
+> Port WireGuarda panel otwiera w ufw także sam — regułą z komentarzem `# wg-panel WireGuard` — i przenosi ją, gdy zmienisz port w Ustawieniach (po **Zastosuj zmiany**). Ręczna reguła z tego kroku nie przeszkadza. Reguła panelu zostaje także po odinstalowaniu panelu, bo VPN działa dalej.
+
 > **Dlaczego tylko tyle:** z internetu otwarty jest wyłącznie port WireGuarda, SSH działa tylko z domowej sieci. Dostęp przez VPN — do NAS, do SSH i RDP na Pi — ustawia panel we własnych łańcuchach. Przekazywanie ruchu zostaje w ufw zablokowane: jeśli łańcuchy panelu z jakiegoś powodu znikną, VPN przestanie przepuszczać ruch, zamiast przepuszczać wszystko.
 
 > Jeśli używasz pulpitu zdalnego (xRDP) na Pi z domowej sieci, dodaj: `sudo ufw allow from 192.168.1.0/24 to any port 3389 proto tcp`.
@@ -508,7 +512,7 @@ Wykonaj **Krok 7** i **Krok 8** ze ścieżki A.
 
 **Gdzie: Przeglądarka → Ustawienia**
 
-Tak jak **Krok 9** ze ścieżki A. Najważniejsze pola to **Endpoint klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820` — i **Port nasłuchu**: ten sam, który przekierowuje router (domyślny `51820`). Sprawdź też **Adres serwera w LAN**.
+Tak jak **Krok 9** ze ścieżki A. Najważniejsze pola to **Endpoint klientów** — adres z Kroku B5 z portem, np. `home.duckdns.org:51820` — i **Port nasłuchu**: ten sam, który przekierowuje router (domyślny `51820`). Sprawdź też **Podsieć LAN**.
 
 ## Krok B10 — Dodaj osoby
 
@@ -568,14 +572,14 @@ Po minucie połącz się telefonem przez VPN i otwórz `https://10.0.0.1:8080` �
 
 # ŚCIEŻKA C — nowy system z kopii panelu
 
-Odtwarzasz wszystko na czystej karcie jednym poleceniem. Co dokładnie wróci, zależy od tego, **jaką kopię masz** na NAS-ie:
+Odtwarzasz wszystko na czystej karcie jednym poleceniem — z kopii na NAS-ie albo z pliku kopii (np. z pendrive'a albo z komputera). Co dokładnie wróci, zależy od tego, **jaką kopię masz**:
 
 | Kopia | Skąd się bierze | Co wraca |
 |---|---|---|
 | **pełna** (plik `….json.enc`, na liście kopii „pełna") | każda kopia zrobiona z ustawionym **hasłem kopii** | wszystko: osoby, ustawienia, konta, hasła do NAS-a i ntfy, historia, **klucz serwera** i **certyfikat HTTPS**. Nikt z użytkowników niczego nie zmienia |
 | **podstawowa** (bez hasła albo ze starszej wersji panelu) | kopia bez hasła albo sprzed wersji z pełnymi kopiami | osoby, tiery, reguły, ustawienia. **Klucza serwera w niej nie ma** — instalator zapyta o niego |
 
-Potrzebujesz: **hasła kopii** z menedżera haseł i danych konta `wg-backup` na NAS-ie. Przy kopii podstawowej dodatkowo **klucza serwera** z menedżera haseł — jeśli go nie masz, da się, ale każda osoba dostanie nowy plik (Krok C5).
+Potrzebujesz: **hasła kopii** z menedżera haseł i — przy kopii z NAS-a — danych konta `wg-backup` na NAS-ie. Przy kopii podstawowej dodatkowo **klucza serwera** z menedżera haseł — jeśli go nie masz, da się, ale każda osoba dostanie nowy plik (Krok C5).
 
 > **Klucz serwera** to tożsamość Twojego VPN — jest wpisany w plik każdej osoby. Z innym kluczem serwera dotychczasowe pliki nie zadziałają: telefon „puka”, a Pi nie odpowiada.
 
@@ -583,9 +587,9 @@ Potrzebujesz: **hasła kopii** z menedżera haseł i danych konta `wg-backup` na
 
 **Gdzie: Komputer, Pi**
 
-1. Wykonaj **Krok B1** (Raspberry Pi OS Lite). Ustaw **tę samą nazwę Pi** co wcześniej — wtedy certyfikat HTTPS z kopii pasuje i telefony nie potrzebują nowego `ca.crt`.
-2. Na routerze Pi ma dostać **ten sam adres** co wcześniej (rezerwacja DHCP) — na niego kieruje przekierowanie portu WireGuarda.
-3. Zapora: **Krok B4**.
+1. Wykonaj **Krok B1** (Raspberry Pi OS Lite). Ustaw **tę samą nazwę Pi** co wcześniej — wtedy certyfikat HTTPS z kopii pasuje i telefony nie potrzebują nowego `ca.crt`. Jeśli nazwa będzie inna, instalator powie to przed odtworzeniem i zaproponuje ustawienie dawnej.
+2. Na routerze Pi ma dostać **ten sam adres** co wcześniej (rezerwacja DHCP) — na niego kieruje przekierowanie portu WireGuarda. Inny adres instalator też zgłosi przed odtworzeniem.
+3. Zapora: **Krok B4** (port WireGuarda panel otworzy też sam).
 
 WireGuarda i iptables nie musisz instalować — instalator doinstaluje je sam.
 
@@ -597,12 +601,21 @@ WireGuarda i iptables nie musisz instalować — instalator doinstaluje je sam.
 sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
 cd ~/wg-panel
-sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh --restore
+sudo INSTALL_LANG=pl ./install.sh --restore
 ```
 
-`LAN_ACCESS` podaj taki, jak przy poprzedniej instalacji (albo pomiń, jeśli panel był dostępny tylko przez VPN).
+Opcje instalacji (dostęp z LAN, port panelu, HTTPS, język) instalator bierze z pełnej kopii — nie musisz ich pamiętać. Opcja podana jawnie wygrywa z kopią, np. `sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh --restore`. `INSTALL_LANG=pl` przyda się tylko do pytań przed odczytaniem kopii; dalej instalator mówi w języku z kopii.
 
-Instalator zapyta po kolei:
+**Kopia z pliku zamiast z NAS-a** — gdy NAS jest niedostępny albo masz kopię na komputerze (przycisk **Ten komputer** w Kopiach). Skopiuj plik na Pi i podaj go instalatorowi; jeśli obok leży plik `.sha256`, instalator sprawdzi sumę:
+
+```bash
+scp wg-panel-20261019-033000.json.enc pi@<adres-pi>:~
+sudo INSTALL_LANG=pl ./install.sh --restore ~/wg-panel-20261019-033000.json.enc
+```
+
+Wtedy instalator pyta tylko o hasło kopii.
+
+Przy kopii z NAS-a instalator zapyta po kolei:
 
 | Pytanie | Wpisz |
 |---|---|
@@ -613,17 +626,20 @@ Instalator zapyta po kolei:
 | Którą odtworzyć | Enter = najnowsza (pokaże listę) |
 | Hasło kopii | z menedżera haseł |
 
+Najpierw instalator pokazuje, co jest w kopii (data, liczba osób, klucz serwera, nazwa i adres serwera, opcje instalacji). Jeśli to Pi ma **inną nazwę** niż w kopii, ostrzega o `ca.crt` i pyta, czy ustawić dawną nazwę (Enter = tak). Jeśli ma **inny adres** w sieci domowej, mówi, co zrobić: rezerwacja DHCP na dawny adres albo poprawka w Ustawieniach po odtworzeniu.
+
 Masz zobaczyć: „pełna kopia, N osób. Klucz serwera i certyfikat są na miejscu”, potem zwykłą instalację, „Tunel podniesiony” i na końcu „Odtworzone z pełnej kopii: zaloguj się swoim dotychczasowym kontem”.
 
 Gdy coś się nie zgadza, instalator mówi wprost, co poprawić:
 
 | Komunikat | Co zrobić |
 |---|---|
-| NAS odrzucił login albo hasło | literówka w haśle albo nazwie konta; w panelu NAS-a sprawdź, czy konto nie jest wyłączone i czy adres Pi nie trafił na listę zablokowanych (np. automatyczna blokada adresów) |
+| NAS: odrzucony login albo hasło | literówka w haśle albo nazwie konta; w ustawieniach NAS-a sprawdź, czy konto nie jest wyłączone i czy adres Pi nie trafił na listę zablokowanych (np. automatyczna blokada adresów) |
 | na udziale backup nie ma katalogu … — są tam: … | uruchom ponownie i wpisz jeden z wypisanych katalogów |
-| na NAS nie ma udziału … | zła nazwa udziału — taka jak folder współdzielony na NAS-ie |
-| NAS nie odpowiada pod adresem … | zły adres albo SMB wyłączone na NAS-ie |
+| NAS: nie ma udziału … | zła nazwa udziału — taka jak folder współdzielony na NAS-ie |
+| NAS: brak odpowiedzi pod adresem … | zły adres albo SMB wyłączone na NAS-ie |
 | nie udało się otworzyć kopii | złe hasło kopii |
+| suma kontrolna kopii się nie zgadza | plik uszkodzony (np. niedokończone kopiowanie) — weź inną kopię |
 
 > **Kopia bez klucza serwera** (podstawowa albo ze starszej wersji): instalator napisze to wprost i zapyta: **1) wklej stary klucz** (z menedżera haseł — wszyscy łączą się dalej starymi plikami) albo **2) wygeneruj nowy** (osoby i ustawienia wrócą, ale każda osoba dostanie nowy plik — Krok C5).
 
@@ -671,9 +687,9 @@ Jeśli w Kroku C2 wygenerowałeś nowy klucz serwera:
 **Gdzie: Telefon, potem Przeglądarka → Alerty**
 
 1. Zainstaluj na telefonie aplikację **ntfy** (bez zakładania konta).
-2. Wymyśl długą, losową nazwę tematu, np. `wg-dom-k7f2q9x4m1` — co najmniej 12 znaków, z cyframi.
+2. Wymyśl długą, losową nazwę tematu, np. `wg-home-r4t8v2x6n3` — co najmniej 12 znaków, z cyframi.
 3. W aplikacji: **+** → wpisz tę nazwę → **Subskrybuj**.
-4. W panelu, zakładka **Alerty** → Ustawienia powiadomień: kanał `ntfy`, adres `https://ntfy.sh/wg-dom-k7f2q9x4m1`, **Zapisz**.
+4. W panelu, zakładka **Alerty** → Ustawienia powiadomień: kanał `ntfy`, adres `https://ntfy.sh/wg-home-r4t8v2x6n3`, **Zapisz**.
 5. Kliknij **Wyślij testowy alert**.
 
 Masz zobaczyć: na telefonie „wg-panel: test powiadomień" **z polskimi znakami** w treści. Stuknięcie w powiadomienie otwiera stronę alertów panelu (przez VPN).
@@ -777,7 +793,7 @@ Jeśli kopia się nie udała, czerwony pasek pokaże powód:
 | brak adresu albo udziału NAS | uzupełnij **Adres** i **Udział** w Ustawieniach kopii, **Zapisz ustawienia** |
 | brak użytkownika albo hasła NAS | uzupełnij **Użytkownik** i **Hasło** w Ustawieniach kopii, **Zapisz ustawienia** |
 | brak smbclient | zainstaluj panel ponownie (Krok 5) albo `sudo apt install -y smbclient` |
-| NAS odrzucił login albo hasło (`NT_STATUS_LOGON_FAILURE`) | złe hasło albo nazwa użytkownika `wg-backup`; w panelu NAS-a sprawdź, czy konto nie jest wyłączone, a adres Pi zablokowany |
+| NAS: odrzucony login albo hasło (`NT_STATUS_LOGON_FAILURE`) | złe hasło albo nazwa użytkownika `wg-backup`; w ustawieniach NAS-a sprawdź, czy konto nie jest wyłączone, a adres Pi zablokowany |
 | na udziale … nie ma katalogu … — są tam: … | wpisz w **Katalog na udziale** jeden z wypisanych katalogów albo utwórz katalog na NAS-ie |
 | `NT_STATUS_BAD_NETWORK_NAME` | zła nazwa udziału — ma być dokładnie taka jak folder współdzielony na NAS-ie (`backup`) |
 | `NT_STATUS_OBJECT_NAME_NOT_FOUND` albo `…PATH_NOT_FOUND` | w udziale nie ma katalogu `wg-panel` — utwórz go |
@@ -1060,14 +1076,28 @@ wgctl restore --nas
 
 Masz zobaczyć: kopie `OK` i listę kopii leżących na NAS (to ta sama lista, z której skorzystasz po awarii karty).
 
+4. Próbne odtworzenie — sprawdza to, czego nie sprawdzi suma kontrolna: czy **hasło kopii z menedżera haseł** pasuje do kopii. Niczego nie instaluje i nie zmienia, więc działa na tym samym Pi:
+
+```bash
+cd ~/wg-panel
+sudo ./install.sh --restore --check                 # najnowsza kopia z NAS-a
+sudo ./install.sh --restore ~/kopia.json.enc --check # albo plik
+```
+
+Masz zobaczyć opis kopii („pełna”, liczba osób, klucz serwera: tak), „Kopia otwiera się tym hasłem i ma wszystko do odtworzenia serwera” i „Nic nie zostało zmienione”. Warto raz na kilka miesięcy i po każdej zmianie hasła kopii.
+
 ### Pełny test (około godziny, na zapasowej karcie SD)
 
 Sprawdza to, co naprawdę ma znaczenie: czy z kopii na NAS-ie da się postawić Pi od zera. Robisz to na **zapasowej karcie** — obecna karta zostaje nietknięta.
 
-1. Wyłącz Pi, włóż zapasową kartę z czystym Raspberry Pi OS (albo użyj drugiego Pi) i przejdź ścieżkę C: kroki **C1–C2** (`install.sh --restore`). Przy okazji sprawdzasz, że hasło kopii w menedżerze haseł jest aktualne.
-2. **Zaraz po odtworzeniu, zanim zrobisz cokolwiek innego:**
-   - Alerty → kanał **wyłączone** — inaczej testowe Pi wysyłałoby powiadomienia na Twój temat ntfy.
-   - Kopie → Ustawienia kopii → odznacz **Rób kopie automatycznie, codziennie** i **Zapisz ustawienia** — pełna kopia przywróciła też hasło do NAS-a, więc testowe Pi zapisywałoby kopie do tego samego folderu i mogłoby usuwać starsze przy rotacji.
+1. Włóż zapasową kartę z czystym Raspberry Pi OS do drugiego Pi (albo wyłącz Pi i podmień kartę) i przejdź ścieżkę C: krok **C1**, potem krok **C2** z `--test`:
+
+```bash
+sudo ./install.sh --restore --test
+```
+
+   Przy okazji sprawdzasz, że hasło kopii w menedżerze haseł jest aktualne.
+2. `--test` robi z kopii **serwer testowy**: kopie automatyczne i powiadomienia są wyłączone (pełna kopia przywróciła też hasło do NAS-a i temat ntfy — bez tego testowe Pi zapisywałoby kopie do tego samego folderu, usuwało starsze przy rotacji i wysyłało Ci alerty), pliki, kody QR i linki dla osób nie są wydawane, a każda strona ma czerwony pasek **Serwer testowy**. Niczego nie wyłączasz ręcznie. `wgctl test status` pokazuje tryb.
 3. Sprawdź, że wszystko wróciło:
 
 ```bash
@@ -1077,8 +1107,8 @@ wgctl diff
 
 Masz zobaczyć: te same osoby, tiery i nazwy co na prawdziwym Pi (porównaj z `wgctl list` na nim), a `wgctl diff` pokazuje wygenerowaną konfigurację bez błędów.
 
-4. Możesz sprawdzić z telefonu, że VPN działa ze starym plikiem (Krok C3) — to najlepszy dowód, że kopia jest pełna. Nie rozdawaj plików z testowego Pi — ma te same klucze co prawdziwe.
-5. Wyłącz testowe Pi i włóż z powrotem właściwą kartę. Zapasową kartę wyczyść albo odłóż jako gotową kopię systemu (wtedy trzymaj ją bezpiecznie — jest na niej klucz serwera).
+4. Przy wyłączonym prawdziwym Pi (albo z przekierowaniem portu na routerze ustawionym na testowe Pi) możesz sprawdzić z telefonu, że VPN działa ze starym plikiem (Krok C3) — to najlepszy dowód, że kopia jest pełna.
+5. Wyłącz testowe Pi i włóż z powrotem właściwą kartę. Zapasową kartę wyczyść albo odłóż jako gotową kopię systemu (wtedy trzymaj ją bezpiecznie — jest na niej klucz serwera). Jeśli testowe Pi ma **zastąpić** prawdziwe, kliknij **To jest teraz właściwy serwer** na czerwonym pasku (albo `wgctl test off`) — kopie i powiadomienia znów zaczną działać.
 
 > ⚠ Jeśli coś w pełnym teście nie zadziała — kopia się nie odtwarza, instalator mówi „kopia BEZ klucza serwera”, lista osób się nie zgadza — napraw to **teraz** (zwykle: ustaw hasło kopii i zrób nową kopię). Po prawdziwej awarii karty będzie za późno.
 
@@ -1208,7 +1238,7 @@ Włącz tunel, odczekaj 10 s, **Ctrl+C**. Brak linii = problem z routerem (przek
 
    Coś się różni → usuń tunel z aplikacji i zaimportuj nowy z karty osoby. Jeśli klucz serwera się zmienił (kopia bez klucza), każda osoba potrzebuje nowego pliku — Krok C5.
 
-3. **Zapora.** Na chwilę `sudo ufw disable`, test, potem koniecznie `sudo ufw enable`. Jeśli bez ufw działa — brakuje reguły `51820/udp ALLOW` (Krok B4).
+3. **Zapora.** Na chwilę `sudo ufw disable`, test, potem koniecznie `sudo ufw enable`. Jeśli bez ufw działa — brakuje reguły dla portu WireGuarda (Krok B4); panel dokłada ją sam przy **Zastosuj zmiany**, więc kliknij je raz i sprawdź `sudo ufw status`.
 
 ## Konfiguracja zmieniona poza panelem
 
@@ -1226,7 +1256,7 @@ Jeśli to nie Ty:
 
 ## Karta SD padła albo nowe Pi
 
-To jest **ścieżka C** z początku instrukcji: czysta karta i `sudo ./install.sh --restore` — instalator odtwarza z pełnej kopii na NAS-ie wszystko, łącznie z kluczem serwera. Wszystkie osoby łączą się bez zmian.
+To jest **ścieżka C** z początku instrukcji: czysta karta i `sudo ./install.sh --restore` (albo `--restore PLIK`) — instalator odtwarza z pełnej kopii wszystko, łącznie z kluczem serwera. Wszystkie osoby łączą się bez zmian.
 
 ## Odinstalowanie
 
@@ -1237,12 +1267,13 @@ To jest **ścieżka C** z początku instrukcji: czysta karta i `sudo ./install.s
 | `sudo /opt/wg-panel/uninstall.sh` | program, usługi (także strażnika), `wgctl`, reguły ufw panelu, urząd certyfikacji panelu | działa dalej z ostatnią konfiguracją; **dane panelu zostają** — ponowna instalacja przywróci panel |
 | `sudo /opt/wg-panel/uninstall.sh --purge` | jak wyżej + baza, kopie na karcie, certyfikaty, kopie plików w `/etc/wireguard`, konto `wg-panel`, zapamiętane opcje instalacji (`/etc/wg-panel`) | działa dalej; od teraz zmieniasz `wg0.conf` ręcznie |
 | `sudo /opt/wg-panel/uninstall.sh --restore` | jak `--purge` + wraca `wg0.conf` z Kroku 2 (`/root/wg-panel-before`) | po `sudo reboot` działa konfiguracja sprzed panelu |
+| `sudo /opt/wg-panel/uninstall.sh --wireguard` | jak `--purge` + cały WireGuard: tunele zatrzymane i wyłączone, wszystko z `/etc/wireguard` (**także klucz serwera**), pakiety `wireguard`, przekazywanie pakietów panelu i reguła ufw portu WireGuarda | **przestaje działać**; usuń przekierowanie portu na routerze |
 
-To samo z rozpakowanej paczki: `sudo INSTALL_LANG=pl ./install.sh --uninstall` (z `--purge` albo `--restore`).
+Bez opcji skrypt pyta: 1) tylko panel, 2) panel i jego dane, 3) powrót do konfiguracji sprzed panelu (tylko gdy jest kopia z Kroku 2), 4) panel i cały WireGuard. To samo z katalogu repozytorium: `sudo INSTALL_LANG=pl ./install.sh --uninstall` (z opcją albo bez).
 
-Skrypt najpierw wypisuje, co usunie, a co zostaje, i czeka, aż wpiszesz `tak` (po polsku — poprzedź polecenie `INSTALL_LANG=pl`; domyślnie skrypt jest po angielsku i czeka na `yes`). Odmówi, gdy zmiana w panelu czeka na potwierdzenie — najpierw ją potwierdź albo cofnij. `--restore` odmówi, gdy nie ma kopii z Kroku 2.
+Skrypt najpierw wypisuje, co usunie, a co zostaje, i czeka, aż wpiszesz `tak` (po polsku — poprzedź polecenie `INSTALL_LANG=pl`; domyślnie skrypt jest po angielsku i czeka na `yes`). Poziom 4 usuwa klucz serwera — tam wpisujesz `usuń wireguard`, także z `--yes`. Odmówi, gdy zmiana w panelu czeka na potwierdzenie — najpierw ją potwierdź albo cofnij. `--restore` odmówi, gdy nie ma kopii z Kroku 2.
 
-> **Czego skrypt nigdy nie rusza:** klucza serwera, usługi `wg-quick@wg0`, kopii na NAS ani `/root/wg-panel-before`. Obecną konfigurację z panelu `--restore` odkłada do `/root/wg-panel-after`, gdybyś chciał wrócić.
+> **Czego skrypt nie rusza** (poza `--wireguard`, który właśnie po to jest): klucza serwera, usługi `wg-quick@wg0`, reguły ufw portu WireGuarda. **Nigdy:** kopii na NAS ani `/root/wg-panel-before` (albo `/root/przed-wg-panel` ze starszych wersji). Obecną konfigurację z panelu `--restore` odkłada do `/root/wg-panel-after`, gdybyś chciał wrócić.
 
 > **Dlaczego przy zwykłym odinstalowaniu VPN działa dalej:** `wg0.conf` wygenerowany przez panel przy starcie sam wczytuje reguły z `/etc/wireguard/wg0-panel-rules.v4`, a przekazywanie pakietów włącza plik w `/etc/sysctl.d`. Skrypt zostawia te pliki — bez nich tunel po restarcie Pi by nie wstał albo nie sięgał do sieci domowej.
 
@@ -1304,7 +1335,11 @@ Menedżer haseł powinien stać **poza Pi i poza NAS-em** (osobna maszyna albo u
 | cofnij ostatnie zastosowanie | `wgctl rollback` |
 | lista kopii / odtwórz | `wgctl restore` / `wgctl restore 12` |
 | kopie na NAS (nowy system) | `wgctl restore --nas` |
-| całe Pi z pełnej kopii (czysta karta) | `sudo INSTALL_LANG=pl ./install.sh --restore` |
+| całe Pi z pełnej kopii (czysta karta) | `sudo INSTALL_LANG=pl ./install.sh --restore [PLIK]` |
+| sprawdzić hasło i kopię bez odtwarzania | `sudo ./install.sh --restore --check [PLIK]` |
+| odtworzyć na drugiej maszynie jako serwer testowy | `sudo ./install.sh --restore --test [PLIK]` |
+| serwer testowy: tryb / uczynić go właściwym | `wgctl test status` / `wgctl test off` |
+| zainstalowana wersja | `wgctl --version` (też na dole każdej strony) |
 | kopia teraz / sprawdź kopie | `wgctl backup` / `wgctl backup --verify` |
 | katalog urządzeń | `wgctl host list`, `wgctl host add drukarka 192.168.1.70` |
 | ruch | `wgctl traffic Marek` |
@@ -1315,6 +1350,7 @@ Menedżer haseł powinien stać **poza Pi i poza NAS-em** (osobna maszyna albo u
 | instalator po polsku / po angielsku | `sudo INSTALL_LANG=pl ./install.sh` / bez zmiennej |
 | odinstalowanie (VPN zostaje) | `sudo /opt/wg-panel/uninstall.sh` |
 | powrót do konfiguracji sprzed panelu | `sudo /opt/wg-panel/uninstall.sh --restore` |
+| usunąć panel i cały WireGuard | `sudo /opt/wg-panel/uninstall.sh --wireguard` |
 | wyłącz kod z aplikacji | `wgctl totp off admin` |
 | logi | `journalctl -u wg-panel -f` |
 
@@ -1356,7 +1392,7 @@ Przed uruchomieniem nowej wersji instalator zapisuje kopię bazy. W **Kopiach** 
 
 Nowa wersja czasem zmienia sposób zapisu `wg0.conf`. Wtedy na liście peerów pojawi się karta „Panel ma zmiany, których nie ma na interfejsie” — kliknij **Zastosuj zmiany** i potwierdź.
 
-Żeby zmienić opcję (np. port), podaj ją przy aktualizacji: `sudo BIND_PORT=8443 ./install.sh`. Pusta wartość wyłącza: `sudo LAN_ACCESS= ./install.sh` — panel zostanie dostępny tylko przez VPN.
+Żeby zmienić opcję (np. port), podaj ją przy aktualizacji: `sudo BIND_PORT=8443 ./install.sh`. `off` wyłącza dostęp z LAN: `sudo LAN_ACCESS=off ./install.sh` — panel zostanie dostępny tylko przez VPN.
 
 Katalog `~/wg-panel` (sklonowane repozytorium) nie jest potrzebny do działania panelu — instalator skopiował z niego wszystko do `/opt/wg-panel`. Możesz go zostawić na następną aktualizację (`git pull`) albo usunąć.
 

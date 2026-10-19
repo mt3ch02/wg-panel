@@ -661,8 +661,28 @@ def post_peer_wipe(req: Request, peer_id: str) -> Response:
     return redirect(with_msg(f"/peers/{peer_id}", _("Klucz prywatny skasowany z serwera.")))
 
 
+def test_refusal() -> Response | None:
+    """Serwer testowy nie wydaje plikow osob (plik, QR, link) - jest kopia z prawdziwego,
+    ale osoby maja dostawac pliki tylko z jednego miejsca."""
+    if not names.is_test(db.settings(CONN)):
+        return None
+    return Response(ui.simple(_("Serwer testowy"), _(
+        "Ten serwer jest testowy - plików, kodów QR i linków dla osób stąd nie wydajemy. "
+        "Wydawaj je z właściwego serwera.")), 403)
+
+
+@route("POST", "/test/off")
+def post_test_off(req: Request) -> Response:
+    db.set_setting(CONN, "test_mode", "0")
+    db.log(CONN, req.actor, "test.off", "")
+    return redirect(with_msg("/", _("To jest teraz właściwy serwer: kopie automatyczne i "
+                                    "powiadomienia działają, pliki osób można wydawać.")))
+
+
 @route("GET", r"/peers/(\d+)/qr.svg")
 def get_peer_qr(req: Request, peer_id: str) -> Response:
+    if test_refusal():
+        return Response("", 403)
     peer = db.peer(CONN, int(peer_id))
     if not peer or not peer["privkey"]:
         return Response("", 404)
@@ -673,6 +693,9 @@ def get_peer_qr(req: Request, peer_id: str) -> Response:
 
 @route("GET", r"/peers/(\d+)/config")
 def get_peer_config(req: Request, peer_id: str) -> Response:
+    refused = test_refusal()
+    if refused:
+        return refused
     peer = db.peer(CONN, int(peer_id))
     if not peer or not peer["privkey"]:
         return Response(ui.simple(_("Brak klucza"), _("Klucz prywatny został już skasowany.")), 404)
@@ -686,6 +709,9 @@ def get_peer_config(req: Request, peer_id: str) -> Response:
 
 @route("POST", r"/peers/(\d+)/delivery")
 def post_peer_delivery(req: Request, peer_id: str) -> Response:
+    refused = test_refusal()
+    if refused:
+        return refused
     token = secrets.token_urlsafe(24)
     now = int(time.time())
     with CONN:
@@ -702,6 +728,9 @@ def post_peer_delivery(req: Request, peer_id: str) -> Response:
 
 @route("GET", r"/d/([A-Za-z0-9_-]+)", login_required=False)
 def get_delivery(req: Request, token: str) -> Response:
+    refused = test_refusal()          # takze link zrobiony jeszcze na prawdziwym serwerze
+    if refused:
+        return refused
     row = CONN.execute(
         "SELECT * FROM deliveries WHERE token = ? AND used_at IS NULL AND expires_at > ?",
         (token, int(time.time())),
@@ -1141,6 +1170,9 @@ def post_alerts_settings(req: Request) -> Response:
 @route("POST", "/alerts/test")
 def post_alerts_test(req: Request) -> Response:
     cfg = db.settings(CONN)
+    if names.is_test(cfg):
+        return redirect_err("/alerts", _("Serwer testowy - powiadomienia są wyłączone. Alerty "
+                                         "widać tylko tutaj."))
     # polskie znaki celowo - test pokazuje od razu, czy tytul i tresc dochodza poprawnie
     ok = notify.send(cfg, "wg-panel: test powiadomień",
                      "Testowy alert z panelu. Jeśli to widzisz z polskimi znakami (ąęłńóśźż), "
@@ -1874,7 +1906,7 @@ def post_account_password(req: Request) -> Response:
 
 @route("POST", "/settings")
 def post_settings(req: Request) -> Response:
-    allowed = set(db.DEFAULT_SETTINGS) | {"managed_host_ports"}
+    allowed = (set(db.DEFAULT_SETTINGS) | {"managed_host_ports"}) - ui.READONLY_SETTINGS
     for key in ("audit_days", "alerts_days"):
         value = req.get(key).strip() if key in req.form else ""
         if key in req.form and not (value.isdigit() and int(value) <= db.RETENTION_MAX):
@@ -2142,6 +2174,36 @@ def client_ip(handler) -> str:
     return address
 
 
+def address_check() -> list:
+    """Adres serwera w sieci domowej idzie za maszyna: zmiana na routerze (np. .10 -> .99)
+    przenosi sie na ustawienia i host w katalogu, certyfikat HTTPS dostaje nowy adres od razu,
+    a alert mowi, co sprawdzic na routerze."""
+    from panel import firstrun
+    try:
+        changes = firstrun.follow(CONN)
+    except Exception as exc:  # noqa: BLE001 - wykrywanie nie moze zatrzymac panelu
+        sys.stderr.write(f"wg-panel: nie udalo sie sprawdzic adresu serwera: {exc}\n")
+        return []
+    for key, old, new in changes:
+        db.log(CONN, "panel", "address.change", f"{old or '-'} -> {new}")
+        if old:      # pierwszy wpis (pusty) to nie zmiana
+            notify.raise_alert(CONN, "address", "adres serwera",
+                               i18n.pl(i18n.ALERTS["address"], old=old, new=new), severity="warn")
+        lan = db.settings(CONN).get("lan", "")
+        if lan and not firstrun.in_network(new, lan):
+            notify.raise_alert(CONN, "address", "adres serwera poza siecia",
+                               i18n.pl(i18n.ALERTS["address_out"], new=new, lan=lan), severity="warn")
+    if changes:
+        tls_refresh()
+    return changes
+
+
+def address_loop() -> None:
+    while True:
+        time.sleep(60)
+        address_check()
+
+
 def tls_refresh(renew: bool = False) -> None:
     """Certyfikat panelu: wlasny urzad (domyslnie) albo wlasne pliki (np. Let's Encrypt).
     Panel laduje certyfikat bez restartu."""
@@ -2244,6 +2306,8 @@ def main() -> int:
     ui.TLS_PORT = BIND_PORT
     TLS["proxies"] = parse_proxies(db.settings(CONN).get("proxy_trusted", ""))[0]
     tls_refresh()
+    address_check()
+    threading.Thread(target=address_loop, daemon=True).start()
     if TLS_ON:
         def tls_loop():
             while True:

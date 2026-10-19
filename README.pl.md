@@ -66,10 +66,10 @@ Skopiuj projekt na Pi i uruchom instalator:
 ```bash
 git clone https://github.com/mt3ch02/wg-panel.git
 cd wg-panel
-sudo INSTALL_LANG=pl LAN_ACCESS=192.168.1.0/24 ./install.sh
+sudo INSTALL_LANG=pl ./install.sh
 ```
 
-`INSTALL_LANG=pl` – komunikaty instalatora po polsku (domyślnie są po angielsku). `LAN_ACCESS` udostępnia panel w sieci domowej. Wpisz adres swojej sieci. Bez tej opcji panel
+`INSTALL_LANG=pl` – komunikaty instalatora po polsku (domyślnie są po angielsku). Panel jest od razu dostępny z sieci domowej (domyślnie `LAN_ACCESS=auto`): instalator bierze sieć, w której stoi serwer, i tylko dla niej otwiera port panelu; możesz też podać ją wprost, np. `LAN_ACCESS=192.168.1.0/24`. Zapamiętana sieć, która przestała pasować do serwera (kopia odtworzona na innym komputerze, nowy router), sama zamienia się na sieć serwera. Aktualizacja zachowuje wcześniejszy wybór: panel ustawiony tylko na VPN zostaje tak, dopóki nie uruchomisz `sudo LAN_ACCESS=auto ./install.sh`. Z `LAN_ACCESS=off` panel
 słucha tylko na adresie VPN `10.0.0.1` i na samym Pi (wtedy wchodzisz przez
 `ssh -L 8080:127.0.0.1:8080 pi@<adres-pi>` i `http://localhost:8080`).
 
@@ -101,10 +101,14 @@ git pull
 sudo ./install.sh
 ```
 
+Instalator wypisuje zmianę (`Aktualizacja wg-panel: 1.3.2 -> 1.4.0`). Zainstalowaną wersję
+widać na dole każdej strony i w `wgctl --version`; co się zmieniło – w
+[CHANGELOG.md](CHANGELOG.md).
+
 Aktualizacja podmienia tylko program. Wszystko, co ustawiłeś, zostaje:
 
 - **Dane** (peery, tiery, reguły, hosty, konta, ustawienia, historia) są w `/var/lib/wg-panel/panel.db`, osobno od kodu w `/opt/wg-panel`. Nowe ustawienia dochodzą z wartościami domyślnymi; Twoje wartości nigdy nie są nadpisywane.
-- **Opcje instalacji** (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) są zapamiętane w `/etc/wg-panel/install.conf`. Nie podajesz ich drugi raz. Żeby którąś zmienić, podaj ją ponownie; pusta wartość (`LAN_ACCESS=`) wyłącza dostęp z LAN. Instalacje sprzed tego pliku odczytują opcje z zainstalowanej usługi i reguły ufw.
+- **Opcje instalacji** (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) są zapamiętane w `/etc/wg-panel/install.conf`. Nie podajesz ich drugi raz. Żeby którąś zmienić, podaj ją ponownie; `LAN_ACCESS=off` (albo pusta `LAN_ACCESS=`) wyłącza dostęp z LAN. Instalacje sprzed tego pliku odczytują opcje z zainstalowanej usługi i reguły ufw.
 - **Kopia bazy** powstaje, zanim ruszy nowy kod. Widać ją w **Kopiach** jako „sprzed aktualizacji” i odtwarzasz ją jak każdą inną.
 - **Wbudowane tiery i host `nas`** powstają tylko przy pierwszej instalacji. Jeśli zmieniłeś im nazwy albo je usunąłeś, aktualizacja ich nie przywróci.
 - **Klucz serwera, certyfikaty i pliki osób** zostają nietknięte. Nikt nie potrzebuje nowego pliku.
@@ -136,15 +140,42 @@ dla kogoś wydajesz przez **rotację kluczy**.
 
 ## Odtworzenie na nowym Pi
 
-Jeśli masz **pełną** kopię na NAS-ie, czysty system staje się starym Pi po jednym poleceniu:
+Jeśli masz **pełną** kopię, czysty system staje się starym Pi po jednym poleceniu:
 
 ```bash
-sudo ./install.sh --restore
+sudo INSTALL_LANG=pl ./install.sh --restore                 # kopia na NAS-ie
+sudo INSTALL_LANG=pl ./install.sh --restore ~/kopia.json.enc   # albo plik kopii (pendrive, komputer)
 ```
 
-Instalator pyta o udział na NAS-ie i hasło kopii, pokazuje listę kopii, sprawdza sumę kontrolną,
-odtwarza klucz serwera, urząd certyfikacji i bazę, po czym podnosi tunel. Wszyscy łączą się dalej
-swoimi plikami, a urządzenia nadal ufają certyfikatowi panelu.
+Instalator pyta o udział na NAS-ie (chyba że podasz plik) i hasło kopii, sprawdza sumę kontrolną,
+odtwarza klucz serwera, urząd certyfikacji, bazę i opcje instalacji (dostęp z LAN, port, HTTPS,
+język), po czym podnosi tunel. Wszyscy łączą się dalej swoimi plikami, a urządzenia nadal ufają
+certyfikatowi panelu. Zanim cokolwiek zmieni, ostrzega, gdy nowe Pi ma inną nazwę albo adres niż stare.
+
+Co jakiś czas sprawdź, czy hasło kopii dalej ją otwiera — nic się nie zmienia:
+
+```bash
+sudo ./install.sh --restore --check
+```
+
+### Próbne odtworzenie na drugiej maszynie (serwer testowy)
+
+Żeby sprawdzić, że odtworzenie naprawdę działa, bez ruszania działającego serwera, odtwórz kopię
+na zapasowej maszynie (drugie Pi, maszyna wirtualna) w trybie testowym:
+
+```bash
+sudo ./install.sh --restore --test              # albo: --restore --test ~/kopia.json.enc
+```
+
+To zwykłe odtworzenie, ale kopia zachowuje się jak serwer testowy: automatyczne kopie
+i powiadomienia są wyłączone (nie nadpisze prawdziwych kopii na NAS-ie ani nie wyśle alertów),
+pliki, kody QR i linki jednorazowe nie są wydawane (kopia ma ten sam klucz serwera, więc
+urządzenie z plikiem z niej kłóciłoby się z prawdziwym serwerem), każda strona ma czerwony pasek
+**Serwer testowy**, a nazwa serwera dostaje „(test)". Ręczna kopia pyta najpierw o potwierdzenie.
+
+Po teście odinstaluj panel albo – jeśli ta maszyna ma zostać właściwym serwerem – kliknij
+**To jest teraz właściwy serwer** na czerwonym pasku (albo `wgctl test off`). `wgctl test
+status` pokazuje tryb.
 
 Przy kopii podstawowej (bez klucza serwera) instalator pyta, czy wkleić stary klucz, czy
 wygenerować nowy. Z nowym kluczem każda osoba potrzebuje nowego pliku.
@@ -155,7 +186,7 @@ Podajesz je jako zmienne środowiskowe przy pierwszej instalacji. Aktualizacje k
 
 | Opcja | Domyślnie | Znaczenie |
 |---|---|---|
-| `LAN_ACCESS` | pusta | Sieć, z której poza VPN wolno otworzyć panel, np. `192.168.1.0/24`. |
+| `LAN_ACCESS` | `auto` | Sieć, z której poza VPN wolno otworzyć panel: `auto` (sieć serwera), np. `192.168.1.0/24`, albo `off` (tylko VPN i tunel SSH). |
 | `BIND_PORT` | `8080` | Port panelu (HTTPS i HTTP na jednym porcie; zwykłe HTTP z sieci jest przekierowywane). |
 | `TLS` | `1` | `0` wyłącza HTTPS. |
 | `INSTALL_LANG` | `en` | `pl` – komunikaty instalatora po polsku. |
@@ -216,6 +247,7 @@ wgctl rule add Anna --accept drukarka --proto tcp --port 631
 wgctl check Anna 192.168.1.10 445 -v           # symulacja; kod 0 = ACCEPT, 2 = DROP
 wgctl diff && wgctl apply                      # potem: wgctl confirm
 wgctl backup --target smb                      # smb / local / both
+wgctl --version                                # zainstalowana wersja
 ```
 
 Pełna lista: `wgctl --help`.
@@ -226,9 +258,10 @@ Pełna lista: `wgctl --help`.
 sudo /opt/wg-panel/uninstall.sh            # usuwa panel; VPN działa dalej, dane zostają
 sudo /opt/wg-panel/uninstall.sh --purge    # usuwa też dane, konto usługi i zapamiętane opcje
 sudo /opt/wg-panel/uninstall.sh --restore  # --purge i powrót do konfiguracji sprzed panelu
+sudo /opt/wg-panel/uninstall.sh --wireguard  # --purge i cały WireGuard (tunele, klucz serwera, pakiety)
 ```
 
-Klucz serwera, usługa `wg-quick@wg0` i kopie na NAS-ie nigdy nie są ruszane.
+Bez opcji skrypt pyta, który poziom wybrać. Klucz serwera i usługę `wg-quick@wg0` rusza tylko `--wireguard` — pyta wtedy o osobną frazę (`usuń wireguard`). Kopii na NAS-ie skrypt nigdy nie rusza.
 
 ## Języki i ograniczenia
 
@@ -255,7 +288,7 @@ helper/       jedyny komponent z rootem
 wgctl         wiersz poleceń
 systemd/      jednostki usług i timer strażnika
 install.sh    instalacja, aktualizacja i --restore
-uninstall.sh  trzy poziomy usuwania
+uninstall.sh  cztery poziomy usuwania
 tests/        testy (nie trafiają na Pi)
 docs/         instrukcje i dokumentacja techniczna (pl, en), zrzuty ekranu
 ```

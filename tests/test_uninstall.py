@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "uninstall.sh")
 FAILURES = []
 
-PANEL_CONF = "[Interface]\n# wygenerowane przez wg-panel\nPostUp = iptables-restore -n /etc/wireguard/wg0-panel-rules.v4\n"
+PANEL_CONF = "[Interface]\n# wygenerowane przez wg-panel\nListenPort = 41194\nPostUp = iptables-restore -n /etc/wireguard/wg0-panel-rules.v4\n"
 V2_CONF = "[Interface]\n# konfiguracja z instrukcji v2\n"
 
 
@@ -56,11 +56,13 @@ def build() -> tuple:
         "userdel": f'echo "userdel $*" >> {calls}\n',
         "groupdel": f'echo "groupdel $*" >> {calls}\n',
         "id": "echo 0\n",
+        "apt-get": f'echo "apt-get $*" >> {calls}\n',
         # trzy reguly: dwie panelu (5 i 9) i jedna cudza (7) - ma zostac
         "ufw": ('if [ "$1" = status ]; then\n'
                 'echo "[ 5] 8080/tcp  ALLOW IN  192.168.50.0/24   # wg-panel LAN"\n'
                 'echo "[ 7] 22/tcp    ALLOW IN  Anywhere          # ssh"\n'
                 'echo "[ 9] 8080/tcp on wg0  ALLOW IN  Anywhere  # wg-panel"\n'
+                'echo "[11] 41194/udp  ALLOW IN  Anywhere  # wg-panel WireGuard"\n'
                 f'else echo "ufw $*" >> {calls}; fi\n'),
     }
     for name, body in stubs.items():
@@ -103,6 +105,8 @@ check("konto wg-panel zostaje", "userdel" not in log(calls))
 check("reguly ufw panelu usuniete od konca, cudza zostaje",
       "ufw --force delete 9\nufw --force delete 5" in log(calls) and "delete 7" not in log(calls), log(calls))
 check("nie rusza innych plikow systemd", exists(fake, "etc/systemd/system/wg-quick@.service.d/keep"))
+check("port WireGuarda w ufw zostaje - VPN dziala dalej", "delete 11" not in log(calls)
+      and "WireGuard" in out.stdout, log(calls))
 shutil.rmtree(base)
 
 print("\n2. --purge: takze dane i konto, VPN dalej dziala")
@@ -130,6 +134,17 @@ check("klucz serwera i przekazywanie pakietow zostaja", exists(fake, "etc/wiregu
 check("mowi, zeby zrestartowac Pi", "sudo reboot" in out.stdout)
 shutil.rmtree(base)
 
+print("\n3b. --restore: stan sprzed panelu ze starszej wersji (/root/przed-wg-panel)")
+base, fake, calls, bindir = build()
+os.rename(os.path.join(fake, "root/wg-panel-before"), os.path.join(fake, "root/przed-wg-panel"))
+out = run(fake, bindir, "--restore", "--yes")
+check("wg0.conf z /root/przed-wg-panel", out.returncode == 0 and
+      open(os.path.join(fake, "etc/wireguard/wg0.conf")).read() == V2_CONF, out.stderr[-300:])
+check("konfiguracja panelu w /root/po-wg-panel (para do starej nazwy)",
+      exists(fake, "root/po-wg-panel/wg0.conf") and not exists(fake, "root/wg-panel-after"))
+check("komunikat podaje faktyczny folder", "/root/przed-wg-panel/wg0.conf" in out.stdout, out.stdout[-500:])
+shutil.rmtree(base)
+
 print("\n4. Zabezpieczenia")
 base, fake, calls, bindir = build()
 with open(os.path.join(fake, "etc/wireguard/wg-panel-pending.json"), "w") as handle:
@@ -153,21 +168,29 @@ shutil.rmtree(base)
 
 
 
-def run_tty(fake: str, bindir: str, answer: str) -> str:
-    """Prawdziwy pseudoterminal - tak jak po uruchomieniu z klawiatury."""
+def run_tty(fake: str, bindir: str, *steps, args: tuple = (), extra: dict | None = None) -> str:
+    """Prawdziwy pseudoterminal - tak jak po uruchomieniu z klawiatury.
+    steps: pary (fragment pytania, odpowiedz) w kolejnosci, w jakiej skrypt pyta."""
     import pty
     import time
     env = {k: v for k, v in os.environ.items() if k != "INSTALL_LANG"}
     env.update(WGPANEL_ROOT=fake, PATH=bindir + os.pathsep + os.environ["PATH"],
-               INSTALL_LANG="pl")
+               INSTALL_LANG="pl", **(extra or {}))
     pid, fd = pty.fork()
     if pid == 0:
-        os.execve("/bin/bash", ["bash", SCRIPT], env)
+        os.execve("/bin/bash", ["bash", SCRIPT, *args], env)
     output = b""
-    deadline = time.time() + 20
-    while time.time() < deadline and "kontynuować".encode() not in output:
-        output += os.read(fd, 4096)
-    os.write(fd, (answer + "\n").encode())
+    for expect, answer in steps:
+        deadline = time.time() + 20
+        while time.time() < deadline and expect.encode() not in output:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output += chunk
+        os.write(fd, (answer + "\n").encode())
     while True:
         try:
             chunk = os.read(fd, 4096)
@@ -182,11 +205,67 @@ def run_tty(fake: str, bindir: str, answer: str) -> str:
 
 print("\n5. Potwierdzenie z klawiatury")
 base, fake, calls, bindir = build()
-out = run_tty(fake, bindir, "nie")
-check("odpowiedz inna niz 'tak' - przerwano, nic nie usuniete",
-      "przerwano" in out and exists(fake, "opt/wg-panel"), out[-200:])
-out = run_tty(fake, bindir, "tak")
-check("'tak' - odinstalowano", not exists(fake, "opt/wg-panel") and "Gotowe." in out, out[-200:])
+out = run_tty(fake, bindir, ("Wybierz", ""), ("kontynuować", "nie"))
+check("menu: Enter = tylko panel; odpowiedz inna niz 'tak' - przerwano, nic nie usuniete",
+      "Co odinstalować?" in out and "przerwano" in out and exists(fake, "opt/wg-panel"), out[-300:])
+check("menu pokazuje cztery poziomy (3 - bo jest kopia sprzed panelu)",
+      all(f"  {n}) " in out for n in "1234") and "cały WireGuard" in out, out[:900])
+out = run_tty(fake, bindir, ("Wybierz", "1"), ("kontynuować", "tak"))
+check("'1' i 'tak' - odinstalowano tylko panel", not exists(fake, "opt/wg-panel") and "Gotowe." in out
+      and exists(fake, "var/lib/wg-panel/panel.db") and exists(fake, "etc/wireguard/wg0.conf"), out[-300:])
+shutil.rmtree(base)
+
+base, fake, calls, bindir = build()
+out = run_tty(fake, bindir, ("Wybierz", "2"), ("kontynuować", "tak"))
+check("menu '2' - panel i dane, VPN zostaje", not exists(fake, "var/lib/wg-panel")
+      and exists(fake, "etc/wireguard/wg0.conf"), out[-300:])
+shutil.rmtree(base)
+
+base, fake, calls, bindir = build()
+shutil.rmtree(os.path.join(fake, "root/wg-panel-before"))
+out = run_tty(fake, bindir, ("Wybierz", "3"))
+check("bez kopii sprzed panelu menu nie ma pozycji 3 (i jej nie przyjmuje)",
+      "  3) " not in out and "nie ma takiej pozycji" in out and exists(fake, "opt/wg-panel"), out[-400:])
+shutil.rmtree(base)
+
+print("\n6. Panel i caly WireGuard")
+base, fake, calls, bindir = build()
+out = run_tty(fake, bindir, ("Wybierz", "4"), ("usuń wireguard", "tak"))
+check("zwykle 'tak' nie wystarcza - przerwano, nic nie usuniete",
+      "przerwano" in out and exists(fake, "etc/wireguard/server_private.key") and exists(fake, "opt/wg-panel"),
+      out[-300:])
+check("ostrzega o kluczu serwera i mowi, co zniknie", "klucz serwera zostanie usunięty" in out
+      and "KLUCZ SERWERA" in out and "wg0" in out, out[-900:])
+out = run_tty(fake, bindir, ("Wybierz", "4"), ("usuń wireguard", "usuń wireguard"))
+check("fraza 'usuń wireguard' - WireGuard usuniety: /etc/wireguard pusty, klucz tez",
+      not os.listdir(os.path.join(fake, "etc/wireguard")) and not exists(fake, "opt/wg-panel")
+      and not exists(fake, "var/lib/wg-panel"), out[-400:])
+check("tunel zatrzymany i wylaczony przy starcie", "systemctl disable --now wg-quick@wg0" in log(calls), log(calls))
+check("pakiety WireGuarda odinstalowane", "apt-get purge -y wireguard wireguard-tools" in log(calls), log(calls))
+check("regula ufw portu WireGuarda tez usunieta (11, 9, 5), cudza zostaje",
+      "ufw --force delete 11\nufw --force delete 9\nufw --force delete 5" in log(calls)
+      and "delete 7" not in log(calls), log(calls))
+check("przekazywanie pakietow panelu usuniete", not exists(fake, "etc/sysctl.d/99-wg-panel-forward.conf"))
+check("kopia sprzed panelu zostaje", exists(fake, "root/wg-panel-before/wg0.conf"))
+check("mowi o routerze i porcie z konfiguracji", "41194/udp" in out and "sudo reboot" in out, out[-500:])
+shutil.rmtree(base)
+
+base, fake, calls, bindir = build()
+out = run(fake, bindir, "--wireguard", "--yes")
+check("--wireguard --yes bez terminala i bez frazy - odmowa, nic nie usuniete",
+      out.returncode != 0 and exists(fake, "etc/wireguard/server_private.key"), out.stderr[-300:])
+env_out = subprocess.run(["bash", SCRIPT, "--wireguard"], capture_output=True, text=True, timeout=60,
+                         env={**{k: v for k, v in os.environ.items() if k != "INSTALL_LANG"},
+                              "WGPANEL_ROOT": fake, "PATH": bindir + os.pathsep + os.environ["PATH"],
+                              "INSTALL_LANG": "pl", "WGPANEL_CONFIRM": "usuń wireguard"})
+check("--wireguard z fraza w WGPANEL_CONFIRM (skrypty) - usuniety",
+      env_out.returncode == 0 and not exists(fake, "etc/wireguard/server_private.key"), env_out.stderr[-300:])
+shutil.rmtree(base)
+
+base, fake, calls, bindir = build()
+out = run(fake, bindir, "--yes")
+check("--yes bez poziomu - jak dotad tylko panel, bez pytan", out.returncode == 0
+      and "Co odinstalować?" not in out.stdout and exists(fake, "etc/wireguard/wg0.conf"), out.stdout[-300:])
 shutil.rmtree(base)
 
 source = open(os.path.join(ROOT, "install.sh"), encoding="utf8").read()

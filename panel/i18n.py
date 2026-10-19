@@ -87,6 +87,8 @@ AUDIT_ACTIONS = {
     "peer.wipe_private_key": "skasowano klucz prywatny", "rollback": "cofnięto konfigurację",
     "rule.add": "dodano regułę", "rule.delete": "usunięto regułę",
     "settings.update": "zmiana ustawień", "setup.user_created": "utworzono konto",
+    "address.change": "zmiana adresu serwera",
+    "test.on": "serwer testowy - włączony", "test.off": "serwer testowy - teraz właściwy",
     "tier.create": "dodano tier", "tier.delete": "usunięto tier", "tier.edit": "zmieniono tier",
     "tier.rule_add": "dodano regułę tieru", "tier.rule_delete": "usunięto regułę tieru",
     "tls.renew": "odnowiono certyfikat", "tls.settings": "zmiana trybu certyfikatu", "wg.restart": "restart wg-quick",
@@ -97,14 +99,14 @@ AUDIT_ACTORS = {"harmonogram": "harmonogram", "anonim": "anonim"}
 LOGGED_TEMPLATES = [
     "brak potwierdzenia na czas", "helper nie zna oczekującej zmiany",
     "zaszyfrowana", "bez szyfrowania", "nieudany", "pełna kopia, zaszyfrowana",
-    "znaleziona na NAS", "znaleziona na Pi", "znaleziona: {where}", "kopia stanu przed aktualizacją",
+    "znaleziona na Pi", "znaleziona na {where}", "znaleziona: {where}", "kopia stanu przed aktualizacją",
     "pełna kopia bez klucza serwera (helper nie odpowiadał), zaszyfrowana", "nie ma takiej kopii", "suma zgodna",
     "przydzielono {n} adresów", "{n} różnic, ale panel ma niezastosowane zmiany",
     "zmiana okien dostępu: {names}",
     "{n} odciętych peerów -> zawieszeni ze skasowanym kluczem",
     "alias $NAS -> nas w {n} miejscach", "dodano host nas z dawnego ustawienia", "dodano {n}",
     "{label}: {summary}; wcześniejszy stan w {safety}",
-    "{n} (karta: {local}, NAS: {remote})", "{n} ({server}: {local}, {storage}: {remote})",
+    "{n} (karta: {local}, {storage}: {remote})", "{n} ({server}: {local}, {storage}: {remote})",
     "Nie ma kopii do sprawdzenia.",
     "{bad} z {total} kopii NIE przeszło weryfikacji - szczegóły w tabeli.",
     "Sprawdzono {n} kopii - sumy kontrolne zgodne.",
@@ -138,6 +140,8 @@ ALERTS = {
                    "komórkową.)",
     "calm": "{name} ({ip}): od {n} min nie widać drugiego urządzenia (przeskakiwanie trwało "
             "około {m} min).",
+    "address": "Adres serwera w sieci domowej zmienił się: {old} -> {new}. Panel przeniósł go w ustawienia i w katalog hostów, a certyfikat HTTPS odnowił. Jeśli router przekierowuje port WireGuarda na stary adres, VPN przestanie działać - popraw przekierowanie albo rezerwację DHCP. Gdy na liście peerów pojawią się niezastosowane zmiany, kliknij Zastosuj zmiany.",
+    "address_out": "Nowy adres serwera {new} jest poza siecią domową z ustawień ({lan}) - sprawdź Ustawienia -> Podsieć LAN.",
 }
 LOGGED_TEMPLATES += list(ALERTS.values())
 
@@ -146,7 +150,7 @@ ALERT_KINDS = {
     "new_endpoint": "nowy adres", "two_devices": "2 urządzenia", "dead_peer": "cisza",
     "backup": "kopia zapasowa", "tamper": "zmiana poza panelem", "expired": "termin minął",
     "apply": "zastosowanie", "traffic_anomaly": "nietypowy ruch", "tls": "certyfikat",
-    "test": "test",
+    "address": "adres serwera", "test": "test",
 }
 
 
@@ -236,46 +240,42 @@ HELPER_PATTERNS = [
     (r"to nie jest certyfikat w formacie PEM", "to nie jest certyfikat w formacie PEM"),
     (r"to nie jest klucz prywatny w formacie PEM", "to nie jest klucz prywatny w formacie PEM"),
     (r"nie moge odczytac pliku: (?P<error>.+)", "nie mogę odczytać pliku: {error}"),
+    # komunikaty o kopiach na udziale: nazwa urzadzenia jest z ustawien, a starsze wersje panelu
+    # zapisywaly je w innym brzmieniu - wzorce przyjmuja dowolna nazwe i stare podpowiedzi,
+    # a pokazuja zawsze obecne brzmienie
     (r"kopia SMB: (?P<name>\S+) lezy pod innym adresem niz w ustawieniach",
-     "kopia SMB: {name} leży pod innym adresem niż w ustawieniach - usuń ją ręcznie na NAS-ie"),
+     "kopia SMB: {name} leży pod innym adresem niż w ustawieniach - usuń ją ręcznie z udziału"),
     (r"brak dostepu do katalogu kopii (?P<path>\S+) - zainstaluj panel ponownie",
      "brak dostępu do katalogu kopii {path} - zainstaluj panel ponownie"),
     (r"kopia SMB \((?P<storage>.+?)\): brak adresu albo udzialu",
      "kopia SMB ({storage}): brak adresu albo udziału - uzupełnij je w ustawieniach kopii"),
     (r"kopia SMB \((?P<storage>.+?)\): brak uzytkownika albo hasla",
      "kopia SMB ({storage}): brak użytkownika albo hasła - uzupełnij je w ustawieniach kopii"),
-    (r"(?P<storage>.+?): odrzucony login albo hasło \(użytkownik (?P<user>\S+)\) - sprawdź je; "
-     r"w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres serwera \((?P<server>.+?)\) "
-     r"zablokowany \(np. automatyczna blokada adresów\)",
-     "{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, "
-     "czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)"),
+    (r"kopia SMB: brak adresu albo udzialu (?P<storage>.+)",
+     "kopia SMB ({storage}): brak adresu albo udziału - uzupełnij je w ustawieniach kopii"),
+    (r"kopia SMB: brak uzytkownika albo hasla (?P<storage>.+)",
+     "kopia SMB ({storage}): brak użytkownika albo hasła - uzupełnij je w ustawieniach kopii"),
+    (r"(?P<storage>.+?): odrzucony login albo hasło \(użytkownik (?P<user>\S+)\) - sprawdź je"
+     r"(?:,|;).*?adres serwera \((?P<server>.+?)\) zablokowany.*",
+     "{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je, a także czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)"),
+    (r"(?P<storage>\S+) odrzucił\w* login albo hasło \(użytkownik (?P<user>\S+)\) - sprawdź je;.*",
+     "{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je, a także czy konto nie jest wyłączone albo adres Pi zablokowany (np. automatyczna blokada adresów)"),
     (r"(?P<storage>.+?): nie ma udziału (?P<share>\S+)", "{storage}: nie ma udziału {share}"),
-    (r"(?P<storage>.+?): brak odpowiedzi pod adresem (?P<host>\S+) - sprawdź adres i czy "
-     r"na NAS-ie jest włączone SMB",
-     "{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB"),
+    (r"na (?P<storage>\S+) nie ma udziału (?P<share>\S+)", "{storage}: nie ma udziału {share}"),
+    (r"(?P<storage>.+?): brak odpowiedzi pod adresem (?P<host>\S+) - sprawdź adres i czy .*SMB.*",
+     "{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy SMB jest włączone"),
+    (r"(?P<storage>\S+) nie odpowiada pod adresem (?P<host>\S+) - sprawdź adres i czy .*SMB.*",
+     "{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy SMB jest włączone"),
     (r"suma kontrolna z pliku \.sha256 \((?P<storage>.+?)\) sie nie zgadza - nie odtwarzam",
      "suma kontrolna z pliku .sha256 ({storage}) się nie zgadza - nie odtwarzam"),
-    (r"kopia SMB: brak adresu albo udzialu NAS",
-     "kopia SMB: brak adresu albo udziału NAS - uzupełnij je w ustawieniach kopii"),
-    (r"kopia SMB: brak uzytkownika albo hasla NAS",
-     "kopia SMB: brak użytkownika albo hasła NAS - uzupełnij je w ustawieniach kopii"),
     (r"brak smbclient - zainstaluj: apt install smbclient",
      "brak smbclient - zainstaluj na Pi: sudo apt install smbclient"),
     (r"brak programu openssl - zainstaluj: sudo apt install openssl",
      "brak programu openssl - zainstaluj: sudo apt install openssl"),
-    (r"NAS odrzucił login albo hasło \(użytkownik (?P<user>\S+)\) - sprawdź je; "
-     r"w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres Pi zablokowany "
-     r"\(np. automatyczna blokada adresów\)",
-     "NAS odrzucił login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, "
-     "czy konto nie jest wyłączone albo adres Pi zablokowany (np. automatyczna blokada adresów)"),
-    (r"na NAS nie ma udziału (?P<share>\S+)", "na NAS nie ma udziału {share}"),
     (r"na udziale (?P<share>\S+) nie ma katalogu (?P<path>\S*) - są tam: (?P<dirs>.+)",
      "na udziale {share} nie ma katalogu {path} - są tam: {dirs}"),
     (r"na udziale (?P<share>\S+) nie ma katalogu (?P<path>\S*)",
      "na udziale {share} nie ma katalogu {path}"),
-    (r"NAS nie odpowiada pod adresem (?P<host>\S+) - sprawdź adres i czy "
-     r"na NAS-ie jest włączone SMB",
-     "NAS nie odpowiada pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB"),
     (r"to nie jest klucz prywatny WireGuard", "to nie jest klucz prywatny WireGuard"),
     (r"urzad certyfikacji w kopii jest uszkodzony", "urząd certyfikacji w kopii jest uszkodzony"),
     (r"(?P<path>\S+) zmieniony poza panelem", "{path} zmieniony poza panelem"),
@@ -1260,7 +1260,7 @@ EN.update({
     'Udział':
         'Share',
     'Katalog na udziale':
-        'Directory on the share',
+        'Folder on share',
 })
 
 # --- komunikaty helpera ---
@@ -1823,20 +1823,16 @@ EN.update({
         'into the block with your domain',
 })
 
-# --- kopia na NAS teraz ---
+# --- kopia na udziale teraz ---
 EN.update({
     'Wyślij bez szyfrowania':
         'Send unencrypted',
-    'kopia SMB: brak użytkownika albo hasła NAS - uzupełnij je w ustawieniach kopii':
-        'SMB backup: NAS username or password missing - fill them in under Backup settings',
     'brak smbclient - zainstaluj na Pi: sudo apt install smbclient':
         'smbclient is missing - install it on the Pi: sudo apt install smbclient',
 })
 
 # --- panel kopii - dwa przyciski ---
 EN.update({
-    'kopia SMB: brak adresu albo udziału NAS - uzupełnij je w ustawieniach kopii':
-        'SMB backup: NAS address or share missing - fill them in under Backup settings',
 })
 
 # --- usuwanie kopii ---
@@ -1855,10 +1851,10 @@ EN.update({
         'Not deleted: {problems}',
     'usunięto kopie':
         'backups deleted',
-    '{n} (karta: {local}, NAS: {remote})':
-        '{n} (card: {local}, NAS: {remote})',
-    'kopia SMB: {name} leży pod innym adresem niż w ustawieniach - usuń ją ręcznie na NAS-ie':
-        'SMB backup: {name} is at a different address than in the settings - delete it manually on the NAS',
+    '{n} (karta: {local}, {storage}: {remote})':
+        '{n} (card: {local}, {storage}: {remote})',
+    'kopia SMB: {name} leży pod innym adresem niż w ustawieniach - usuń ją ręcznie z udziału':
+        'SMB backup: {name} is at a different address than in the settings - delete it from the share manually',
 })
 
 # --- kopia sprzed odtworzenia ---
@@ -1917,18 +1913,14 @@ EN.update({
         "HTTPS certificate restored - devices don't need a new ca.crt.",
 })
 
-# --- komunikaty NAS i pelnej kopii ---
+# --- komunikaty udzialu i pelnej kopii ---
 EN.update({
-    'NAS odrzucił login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres Pi zablokowany (np. automatyczna blokada adresów)':
-        "the NAS rejected the user name or password (user {user}) - check them; in the NAS settings also check that the account isn't disabled and the Pi's address isn't blocked (e.g. automatic IP blocking)",
-    'na NAS nie ma udziału {share}':
-        'the NAS has no share named {share}',
+    '{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je, a także czy konto nie jest wyłączone albo adres Pi zablokowany (np. automatyczna blokada adresów)':
+        "{storage}: user name or password rejected (user {user}) - check them, and also that the account isn't disabled and the Pi's address isn't blocked (e.g. automatic IP blocking)",
     'na udziale {share} nie ma katalogu {path} - są tam: {dirs}':
         'share {share} has no folder {path} - it has: {dirs}',
     'na udziale {share} nie ma katalogu {path}':
         'share {share} has no folder {path}',
-    'NAS nie odpowiada pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB':
-        "the NAS doesn't respond at {host} - check the address and that SMB is enabled on the NAS",
     'to nie jest klucz prywatny WireGuard':
         'this is not a WireGuard private key',
     'urząd certyfikacji w kopii jest uszkodzony':
@@ -1958,7 +1950,7 @@ EN.update({
         "The backup password has only {have} characters, and a full backup contains the server key. Use at least {n} characters, ideally from a password manager's generator.",
 })
 
-EN.update({'znaleziona na NAS': 'found on the NAS'})
+EN.update({'znaleziona na {where}': 'found on {where}'})
 
 EN.update({
     'Logowanie starym hasłem (konto panelu z kopii)': 'Sign in with the old password (panel account from the backup)',
@@ -2078,8 +2070,15 @@ EN.update({
     "nowy adres": "new address", "2 urządzenia": "2 devices", "cisza": "silence",
     "kopia zapasowa": "backup", "zmiana poza panelem": "changed outside", "termin minął": "expired",
     "zastosowanie": "apply", "nietypowy ruch": "unusual traffic", "certyfikat": "certificate",
-    "test": "test", "strażnik": "watchdog",
+    "test": "test", "strażnik": "watchdog", "adres serwera": "server address",
+    'Adres serwera w sieci domowej zmienił się: {old} -> {new}. Panel przeniósł go w ustawienia i w katalog hostów, a certyfikat HTTPS odnowił. Jeśli router przekierowuje port WireGuarda na stary adres, VPN przestanie działać - popraw przekierowanie albo rezerwację DHCP. Gdy na liście peerów pojawią się niezastosowane zmiany, kliknij Zastosuj zmiany.':
+        "The server's address in the home network changed: {old} -> {new}. The panel moved it into the settings and the host catalog and renewed the HTTPS certificate. If the router forwards the WireGuard port to the old address, the VPN will stop working - fix the port forward or the DHCP reservation. When the peer list shows changes not yet applied, click Apply changes.",
+    'Nowy adres serwera {new} jest poza siecią domową z ustawień ({lan}) - sprawdź Ustawienia -> Podsieć LAN.':
+        "The server's new address {new} is outside the home network from the settings ({lan}) - check Settings -> LAN subnet.",
 })
+
+EN.update({'zmiana adresu serwera': 'server address changed',
+           'wykrywany z tego serwera': 'detected from this server'})
 
 EN.update({'Nowsze': 'Newer', 'Starsze': 'Older', 'Strony': 'Pages', 'strona {n} z {all}': 'page {n} of {all}'})
 
@@ -2120,8 +2119,6 @@ EN.update({
         'Ports on the server itself',
     'Adres serwera w LAN':
         'Server address in the LAN',
-    'adres serwera w sieci domowej':
-        "the server's address in the home network",
     'Adresy urządzeń (np. {storage}) ustawiasz w zakładce {hosts} - stąd zniknęły, żeby nie było dwóch miejsc na to samo.':
         "You set device addresses (e.g. {storage}) in the {hosts} tab - they were removed from here so there aren't two places for the same thing.",
     'Po lewej to, co panel by zapisał, po prawej to, co działa teraz na serwerze. Panel jest źródłem prawdy: przy zastosowaniu nadpisze plik swoją wersją.':
@@ -2224,12 +2221,12 @@ EN.update({
         'SMB backup ({storage}): address or share missing - fill them in under Backup settings',
     'kopia SMB ({storage}): brak użytkownika albo hasła - uzupełnij je w ustawieniach kopii':
         'SMB backup ({storage}): username or password missing - fill them in under Backup settings',
-    '{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)':
-        "{storage}: user name or password rejected (user {user}) - check them; in the NAS settings also check that the account isn't disabled and the server's address ({server}) isn't blocked (e.g. automatic IP blocking)",
+    '{storage}: odrzucony login albo hasło (użytkownik {user}) - sprawdź je, a także czy konto nie jest wyłączone albo adres serwera ({server}) zablokowany (np. automatyczna blokada adresów)':
+        "{storage}: user name or password rejected (user {user}) - check them, and also that the account isn't disabled and the server's address ({server}) isn't blocked (e.g. automatic IP blocking)",
     '{storage}: nie ma udziału {share}':
         '{storage}: there is no share named {share}',
-    '{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy na NAS-ie jest włączone SMB':
-        '{storage}: no response at {host} - check the address and that SMB is enabled on the NAS',
+    '{storage}: brak odpowiedzi pod adresem {host} - sprawdź adres i czy SMB jest włączone':
+        '{storage}: no response at {host} - check the address and that SMB is enabled',
     'suma kontrolna z pliku .sha256 ({storage}) się nie zgadza - nie odtwarzam':
         "the checksum from the .sha256 file ({storage}) doesn't match - not restoring",
 })
@@ -2244,4 +2241,30 @@ EN.update({
         'no traffic',
     'Panel nie zbierał jeszcze wtedy danych.':
         "The panel wasn't collecting data yet.",
+})
+
+# --- serwer testowy (install.sh --restore --test) ---
+EN.update({
+    'Serwer testowy': 'Test server',
+    'kopie automatyczne i powiadomienia wyłączone. Nie wydawaj stąd plików osobom.':
+        "automatic backups and notifications are off. Don't issue files to people from here.",
+    'To jest teraz właściwy serwer': 'This is now the real server',
+    'Uczynić ten serwer właściwym?': 'Make this the real server?',
+    'Kopie automatyczne i powiadomienia zaczną działać, a pliki osób będzie można wydawać. Zrób to tylko wtedy, gdy ta maszyna zastępuje dawny serwer - dwa serwery z tym samym kluczem i tymi samymi kopiami to kłopot.':
+        'Automatic backups and notifications will start working and people\'s files can be issued. Do this only when this machine replaces the old server - two servers with the same key and the same backups are trouble.',
+    'To jest właściwy serwer': 'This is the real server',
+    'Serwer testowy - plik, kod QR i link dla tej osoby nie są wydawane. Wydawaj je z właściwego serwera.':
+        "Test server - this person's file, QR code and link are not issued. Issue them from the real server.",
+    'Ten serwer jest testowy - plików, kodów QR i linków dla osób stąd nie wydajemy. Wydawaj je z właściwego serwera.':
+        "This is a test server - files, QR codes and links for people aren't issued here. Issue them from the real server.",
+    'Serwer testowy - powiadomienia są wyłączone. Alerty widać tylko tutaj.':
+        'Test server - notifications are off. Alerts are shown only here.',
+    'To jest teraz właściwy serwer: kopie automatyczne i powiadomienia działają, pliki osób można wydawać.':
+        "This is now the real server: automatic backups and notifications work, people's files can be issued.",
+    'Zrobić kopię na serwerze testowym?': 'Make a backup on the test server?',
+    'To serwer testowy. Kopia trafi tam, gdzie kopie prawdziwego serwera ({storage} albo ten dysk) i będzie miała osoby i klucz z testu.':
+        "This is a test server. The backup goes where the real server's backups go ({storage} or this disk) and holds the test's people and key.",
+    'Zrób kopię': 'Make a backup',
+    'serwer testowy - włączony': 'test server - on',
+    'serwer testowy - teraz właściwy': 'test server - now the real one',
 })

@@ -29,7 +29,7 @@ check("skladnia bash poprawna", subprocess.run(["bash", "-n", SCRIPT]).returncod
 plain = [line.strip() for line in source.splitlines()
          if re.match(r'\s*(info|warn|die) "[^$]', line)]
 check("kazdy komunikat przechodzi przez t (dwa jezyki)", not plain, "; ".join(plain[:3]))
-check("podsumowanie w obu jezykach", "\nGotowe.\n" in source and "\nDone.\n" in source)
+check("podsumowanie w obu jezykach", "\nGotowe. wg-panel $NEW_VERSION\n" in source and "\nDone. wg-panel $NEW_VERSION\n" in source)
 check("przejecie istniejacego wg0.conf: stan sprzed panelu zapisany raz (droga powrotna --restore)",
       'BEFORE=/root/wg-panel-before' in source and '[ ! -f "$BEFORE/wg0.conf" ]' in source
       and 'cp -p /etc/wireguard/wg0.conf "$BEFORE/"' in source

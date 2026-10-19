@@ -14,6 +14,14 @@ DEFAULTS = {"name_server": "Pi", "name_storage": "NAS"}
 MAX_LENGTH = 24
 
 _current = dict(DEFAULTS)
+_test = {"on": False}
+TEST_SUFFIX = " (test)"
+
+
+def is_test(cfg: dict | None = None) -> bool:
+    """Serwer testowy (install.sh --restore --test): kopie automatyczne i powiadomienia
+    wylaczone, pliki osob nie sa wydawane. Ustawienie test_mode nie trafia do kopii."""
+    return (cfg.get("test_mode") == "1") if cfg is not None else _test["on"]
 
 
 def clean(value, key: str) -> str:
@@ -28,10 +36,13 @@ def load(cfg: dict) -> None:
     """Biezace nazwy z ustawien - panel wola to na poczatku kazdego zadania."""
     for key in DEFAULTS:
         _current[key] = clean(cfg.get(key), key)
+    _test["on"] = is_test(cfg)
 
 
 def server(cfg: dict | None = None) -> str:
-    return clean(cfg.get("name_server"), "name_server") if cfg is not None else _current["name_server"]
+    name = clean(cfg.get("name_server"), "name_server") if cfg is not None else _current["name_server"]
+    # tylko przy wyswietlaniu - zapisana nazwa (i ta w kopii) zostaje bez dopisku
+    return name + TEST_SUFFIX if is_test(cfg) else name
 
 
 def storage(cfg: dict | None = None) -> str:

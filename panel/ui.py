@@ -12,6 +12,7 @@ import time
 import urllib.parse
 
 from . import db, dual, export, i18n, names, notify, render
+from . import version as panel_version
 from .i18n import _
 
 
@@ -630,6 +631,20 @@ function wgFlash(text) {
 """
 
 
+def test_bar(sess) -> str:
+    """Pasek serwera testowego na kazdej stronie - zeby nie pomylic go z prawdziwym."""
+    off_ask = ask(_("Uczynić ten serwer właściwym?"),
+                  _("Kopie automatyczne i powiadomienia zaczną działać, a pliki osób będzie można "
+                    "wydawać. Zrób to tylko wtedy, gdy ta maszyna zastępuje dawny serwer - dwa "
+                    "serwery z tym samym kluczem i tymi samymi kopiami to kłopot."),
+                  _("To jest właściwy serwer"), kind="apply")
+    return (f'<div class="test-bar" role="alert"><span><strong>{e(_("Serwer testowy"))}</strong> - '
+            f'{e(_("kopie automatyczne i powiadomienia wyłączone. Nie wydawaj stąd plików osobom."))}</span>'
+            f'<form method="post" action="/test/off" class="inline"{off_ask}>'
+            f'<input type="hidden" name="csrf" value="{e(sess["csrf"])}">'
+            f'<button>{e(_("To jest teraz właściwy serwer"))}</button></form></div>')
+
+
 def page(title: str, body: str, sess=None, flash: str = "", error: str = "",
          alerts: int = 0) -> str:
     toggle = ('<button class="theme-toggle" id="theme-toggle" type="button" '
@@ -682,6 +697,12 @@ def page(title: str, body: str, sess=None, flash: str = "", error: str = "",
     if flash:
         banner += f'<div class="banner ok">{e(flash)}</div>'
     extras = (pending_bar(sess, state) + confirm_dialog()) if sess else ""
+    # wersja tylko po zalogowaniu - strona logowania nie zdradza, co tu dziala
+    footer = (f'<footer class="app-version">wg-panel {e(panel_version.get())}</footer>' if sess else "")
+    if sess and names.is_test():
+        extras = test_bar(sess) + extras
+    if names.is_test():
+        title = "[TEST] " + title
     return f"""<!doctype html>
 <html lang="{i18n.lang()}" data-theme="dark"><head>
 <meta charset="utf-8">
@@ -880,6 +901,7 @@ var WG_SKEW = {int(time.time())} - Date.now() / 1000;</script>
 <header><a href="/" class="logo">wg-panel</a>{menu}{nav}</header>
 {extras}
 <main>{banner}{body}</main>
+{footer}
 </body></html>"""
 
 
@@ -1407,7 +1429,10 @@ def peer_detail(sess, cfg, peer, rules, tiers, client_conf, qr_svg, stat, delive
                      _("Plik tej osoby przestanie działać po zastosowaniu zmian, a adres {ip} "
                        "wróci do puli wolnych.", ip=peer["ip"]), _("Usuń peera"))
     key_block = ""
-    if peer["privkey"]:
+    if peer["privkey"] and names.is_test():
+        key_block = ('<p class="banner err">' + e(_("Serwer testowy - plik, kod QR i link dla tej "
+                     "osoby nie są wydawane. Wydawaj je z właściwego serwera.")) + '</p>')
+    elif peer["privkey"]:
         key_block = f"""
         <div class="qr">{qr_svg}</div>
         <details><summary>{_("Pokaż plik konfiguracyjny")}</summary>
@@ -1779,6 +1804,9 @@ def tiers_page(sess, tiers, flash: str = "", error: str = "", alerts: int = 0) -
     return page(_("Tiery"), body, sess, flash=flash, error=error, alerts=alerts)
 
 
+READONLY_SETTINGS = {"server_lan"}
+
+
 def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "",
                   alerts: int = 0, has_totp: bool = False, tls: dict | None = None) -> str:
     csrf = _csrf(sess)
@@ -1802,7 +1830,7 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     ]
     hints = {
         "endpoint": _("DDNS albo publiczny IP z portem"),
-        "server_lan": _("adres serwera w sieci domowej"),
+        "server_lan": _("wykrywany z tego serwera"),
         "dns_full": _("trafia do plików z całym ruchem"),
         "mtu": _("puste = domyślne"),
         "confirm_seconds": _("od {low} do {high}", low=db.CONFIRM_MIN, high=db.CONFIRM_MAX),
@@ -1814,8 +1842,12 @@ def settings_page(sess, cfg, server_pubkey: str, flash: str = "", error: str = "
     def field(key, label):
         # podpis i podpowiedz maja stala wysokosc, zeby pola w wierszu staly rowno
         hint = e(hints.get(key, ""))
+        # adres serwera w LAN to fakt o maszynie (panel sledzi go sam) - tylko do odczytu,
+        # bez name, wiec zapis ustawien go nie nadpisze
+        attrs = 'readonly aria-readonly="true" class="readonly"' if key in READONLY_SETTINGS \
+            else f'name="{key}"'
         return (f'<label class="fixed"><span class="lbl">{e(label)}</span>'
-                f'<input name="{key}" value="{e(cfg.get(key, ""))}">'
+                f'<input {attrs} value="{e(cfg.get(key, ""))}">'
                 f'<small class="muted">{hint}</small></label>')
 
     inputs = "".join(field(key, label) for key, label in fields)
@@ -2553,6 +2585,10 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
         f' data-detail="{e(_("Zaznaczone: {n} ({server}: {local}, {storage}: {smb}).", **names.kw(), n="{n}", local="{local}", smb="{smb}"))}"')
     failed_button = (f'<button type="button" onclick="wgPickFailed()">{e(_("Zaznacz nieudane"))}</button>'
                      if any(not item["ok"] for item in items) else "")
+    test_ask = ask(_("Zrobić kopię na serwerze testowym?"),
+                   _("To serwer testowy. Kopia trafi tam, gdzie kopie prawdziwego serwera ({storage} "
+                     "albo ten dysk) i będzie miała osoby i klucz z testu.", **names.kw()),
+                   _("Zrób kopię"), kind="apply") if names.is_test() else ""
     heads = ('<th class="pick"><input type="checkbox" data-pick-all aria-label="' +
              e(_("zaznacz wszystkie")) + '"></th>' +
              "".join(f"<th>{e(h)}</th>" for h in (_("Kiedy"), _("Gdzie"), _("Rodzaj"), _("Stan"))))
@@ -2562,12 +2598,12 @@ def backups_page(sess, cfg, rows, files, flash: str = "", error: str = "",
         {backup_status(cfg, rows)}
         <h3 class="now-title">{e(_("Zrób kopię teraz - gdzie?"))}</h3>
         <div class="dest-grid">
-          <form method="post" action="/backups/run"{plain_ask}>
+          <form method="post" action="/backups/run"{test_ask or plain_ask}>
             {csrf}<input type="hidden" name="target" value="smb">
             <button class="dest"{'' if smb_set else ' disabled'}><strong>{e(names.storage())}</strong>
               <span>{e(smb_note)}</span></button>
           </form>
-          <form method="post" action="/backups/run">
+          <form method="post" action="/backups/run"{test_ask}>
             {csrf}<input type="hidden" name="target" value="local">
             <button class="dest"><strong>{e(names.server())}</strong>
               <span>{e(_("Kopia zostaje tylko tutaj. Szybko, ale nie chroni przed awarią serwera."))}</span></button>

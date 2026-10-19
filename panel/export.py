@@ -27,6 +27,7 @@ import time
 
 from . import cryptobox, db, i18n
 from . import names as device_names
+from . import version as panel_version
 
 FORMAT_VERSION = 1
 SAFE_PATH = re.compile(r"^[A-Za-z0-9._/-]*$")
@@ -45,6 +46,9 @@ RUNTIME_SETTINGS = {
     "confirm_auto", "confirm_since",
     # ostatnie odswiezenie listy z NAS (przycisk) - inne Pi, inna lista
     "smb_scan",
+    # serwer testowy: wlasnosc tej maszyny, nie konfiguracji - kopia z testu odtworzona gdzie
+    # indziej nie moze byc "testowa", a kopia prawdziwego serwera nie wylacza testu
+    "test_mode",
 }
 
 EXPORT_TABLES = {
@@ -88,6 +92,7 @@ def build(conn: sqlite3.Connection, include_secrets: bool = False,
         "format": FORMAT_VERSION,
         "created_at": int(time.time()),
         "created_by": "wg-panel",
+        "version": panel_version.get(),
         # klucz PUBLICZNY serwera z chwili kopii - po odtworzeniu panel porownuje go z kluczem
         # nowego Pi i mowi wprost, czy stare pliki osob zadzialaja
         "server_pubkey": db.settings(conn).get("server_pubkey", ""),
@@ -124,6 +129,8 @@ def pack(conn: sqlite3.Connection, passphrase: str = "") -> tuple[bytes, bool, s
         return blob, False, "basic"
     data = build(conn, include_secrets=True, history=True)
     data["full"] = True
+    data["install"] = install_options()
+    data["host"] = {"name": host_name()}
     system = system_identity(conn)
     if system:
         data["system"] = {"server_key": system["server_key"], "ca": system.get("ca")}
@@ -134,6 +141,32 @@ def pack(conn: sqlite3.Connection, passphrase: str = "") -> tuple[bytes, bool, s
 KIND_DETAIL = {"full": "pełna kopia, zaszyfrowana",
                "full-nokey": "pełna kopia bez klucza serwera (helper nie odpowiadał), zaszyfrowana",
                "basic": "bez szyfrowania"}
+
+
+# opcje instalatora (install.sh) - w pelnej kopii, zeby odtworzenie na nowym Pi niczego nie
+# wymagalo; sa jawne (siec LAN, port, HTTPS, jezyk), ale jada razem z reszta pelnej kopii
+INSTALL_CONF = os.environ.get("WGPANEL_CONF", "/etc/wg-panel/install.conf")
+INSTALL_KEYS = ("LAN_ACCESS", "BIND_PORT", "TLS", "INSTALL_LANG", "BIND_HOST")
+
+
+def install_options(path: str | None = None) -> dict:
+    """KLUCZ=wartosc z pliku opcji instalatora; brak pliku = pusty slownik."""
+    out = {}
+    try:
+        with open(path or INSTALL_CONF, encoding="utf8") as handle:
+            for line in handle:
+                key, sep, value = line.strip().partition("=")
+                if sep and key in INSTALL_KEYS:
+                    out[key] = value
+    except OSError:
+        return {}
+    return out
+
+
+def host_name() -> str:
+    """Nazwa tego serwera tak, jak widzi ja urzad certyfikacji panelu (helper, _tls_names)."""
+    import socket
+    return re.sub(r"[^a-z0-9-]", "", socket.gethostname().split(".")[0].lower()) or "wg-panel"
 
 
 def filename(encrypted: bool, moment: float | None = None) -> str:
@@ -703,8 +736,8 @@ def prune(cfg: dict, directory: str) -> None:
 
 def due(cfg: dict, last_run: float, now: float | None = None) -> bool:
     """Czy wybila pora na kopie dobowa."""
-    if cfg.get("backup_enabled") != "1":
-        return False
+    if cfg.get("backup_enabled") != "1" or cfg.get("test_mode") == "1":
+        return False                 # serwer testowy nie pisze kopii obok prawdziwego
     moment = time.localtime(now if now is not None else time.time())
     wanted = (cfg.get("backup_time") or "03:30").split(":")
     try:
@@ -872,8 +905,8 @@ def explain_smb(cfg: dict, exc: Exception) -> str:
     share, path = cfg.get("smb_share", ""), (cfg.get("smb_path") or "").strip("/")
     if "LOGON_FAILURE" in text:
         return (f"{device_names.storage(cfg)}: odrzucony login albo hasło (użytkownik "
-                f"{cfg.get('smb_user') or '-'}) - sprawdź je; w panelu NAS-a sprawdź też, czy konto nie jest "
-                f"wyłączone albo adres serwera ({device_names.server(cfg)}) zablokowany (np. automatyczna blokada adresów)")
+                f"{cfg.get('smb_user') or '-'}) - sprawdź je, a także czy konto nie jest wyłączone albo "
+                f"adres serwera ({device_names.server(cfg)}) zablokowany (np. automatyczna blokada adresów)")
     if "BAD_NETWORK_NAME" in text:
         return f"{device_names.storage(cfg)}: nie ma udziału {share}"
     if "OBJECT_NAME_NOT_FOUND" in text or "OBJECT_PATH_NOT_FOUND" in text:
@@ -886,7 +919,7 @@ def explain_smb(cfg: dict, exc: Exception) -> str:
     if any(code in text for code in ("IO_TIMEOUT", "HOST_UNREACHABLE", "CONNECTION_REFUSED",
                                      "Connection to", "NETWORK_UNREACHABLE")):
         return (f"{device_names.storage(cfg)}: brak odpowiedzi pod adresem {cfg.get('smb_host')} - sprawdź "
-                "adres i czy na NAS-ie jest włączone SMB")
+                "adres i czy SMB jest włączone")
     return text
 
 

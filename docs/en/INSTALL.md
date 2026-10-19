@@ -96,7 +96,7 @@ You should see three files: `wg0.conf`, `iptables.rules`, `ufw.txt`.
 
 > The installer makes this snapshot by itself if `/root/wg-panel-before` doesn't exist yet. A manual snapshot before installing doesn't hurt — the installer won't overwrite it.
 >
-> **About the name:** `wg-panel-before` is Polish for "before wg-panel". The uninstaller looks for exactly this directory, so keep the name.
+> **About the name:** the uninstaller looks for exactly this directory, so keep the name. Older panel versions used `/root/przed-wg-panel` — if you have that directory, the installer and the uninstaller use it instead.
 
 ## Step 3 — Store the server's private key outside the Pi
 
@@ -168,17 +168,19 @@ ssh -L 8080:127.0.0.1:8080 pi@192.168.1.10
 
 Leave that window open and browse to `http://localhost:8080` (over the SSH tunnel it stays plain HTTP — the traffic is encrypted by SSH anyway, and the certificate doesn't cover `localhost`).
 
-**Or access from the whole home network**, without a tunnel — then install the panel like this:
+**Access from the whole home network** is on by default for a new install (`LAN_ACCESS=auto`) — a plain `sudo ./install.sh` already does this. An update keeps your earlier choice; to turn it on later:
 
 ```bash
-sudo LAN_ACCESS=192.168.1.0/24 ./install.sh
+sudo LAN_ACCESS=auto ./install.sh
 ```
+
+`auto` takes the network the Pi is in (you can also give it, e.g. `LAN_ACCESS=192.168.1.0/24`). If the saved network ever stops matching the Pi — a new router, a backup restored on another computer — the installer switches to the Pi's network by itself and removes the old firewall rule.
 
 The panel then listens on all of the Pi's addresses, and the firewall lets in only your home network. You browse to `https://192.168.1.10:8080` (the old `http://` address redirects to `https://`). From the VPN, only people you explicitly allow can open the panel (Step 12b).
 
 > **The price:** every device on your Wi-Fi can see the login page. Traffic is encrypted (HTTPS) so nobody can sniff the password, but until you install the certificate (Step 7a) your browser will warn you. A lockout after five failed logins helps too.
 
-> **Changing your mind later** just means running the installer again with or without `LAN_ACCESS` — your data and settings are untouched.
+> **Changing your mind later** just means running the installer again with `LAN_ACCESS=off` (VPN and SSH tunnel only) or `LAN_ACCESS=auto` — your data and settings are untouched.
 
 You should see the "First run" page.
 
@@ -219,7 +221,7 @@ The installer detected your home network, the Pi's address and the interface. Ch
 | **LAN subnet** | your home network, e.g. `192.168.1.0/24` — detected at install |
 | VPN subnet | the tunnel network, e.g. `10.0.0.0/24` |
 | Server address in the VPN | the Pi's address inside the tunnel, e.g. `10.0.0.1` |
-| **Server address in the LAN** | the Pi's fixed address, e.g. `192.168.1.10` — detected at install |
+| **Server address in the LAN** | the Pi's address, e.g. `192.168.1.10` — read-only: the panel detects it and follows it when it changes |
 | WAN interface | the Pi's internet-facing interface: `eth0`, `end0`, `wlan0`… — detected at install |
 | Listen port | the WireGuard port — `51820` by default; if your router forwards a different one, change it (on path A the import in Step 11 fills it in from `wg0.conf` anyway) |
 | DNS for full mode | e.g. `9.9.9.9` — Quad9: blocks malicious domains and doesn't profile queries |
@@ -465,6 +467,8 @@ sudo ufw status verbose
 
 You should see: `deny (incoming)`, a rule for port 22 from your LAN and a rule for `51820/udp`.
 
+> The panel also opens the WireGuard port in ufw by itself — a rule with the comment `# wg-panel WireGuard` — and moves it when you change the port in Settings (after **Apply changes**). The manual rule from this step doesn't get in the way. The panel's rule stays even after uninstalling the panel, because the VPN keeps working.
+
 > **Why only this:** the only port open to the internet is the WireGuard port, and SSH works only from the home network. VPN access — to the NAS, to SSH and RDP on the Pi — is set up by the panel in its own chains. Packet forwarding stays blocked in ufw: if the panel's chains ever disappear, the VPN stops passing traffic instead of passing everything.
 
 > If you use a remote desktop (xRDP) on the Pi from the home network, add: `sudo ufw allow from 192.168.1.0/24 to any port 3389 proto tcp`.
@@ -505,7 +509,7 @@ Do **Step 7** and **Step 8** from path A.
 
 **Where: Browser → Settings**
 
-As in **Step 9** from path A. The most important fields are **Client endpoint** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820` — and **Listen port**: the same port your router forwards (`51820` by default). Also check **Server address in the LAN** and the **LAN subnet**.
+As in **Step 9** from path A. The most important fields are **Client endpoint** — the address from Step B5 with the port, e.g. `home.duckdns.org:51820` — and **Listen port**: the same port your router forwards (`51820` by default). Also check the **LAN subnet**.
 
 ## Step B10 — Add people
 
@@ -565,14 +569,14 @@ After a minute connect with your phone through the VPN and open `https://10.0.0.
 
 # PATH C — new system from a panel backup
 
-You rebuild everything on a clean card with one command. What exactly comes back depends on **which backup you have** on the NAS:
+You rebuild everything on a clean card with one command — from a backup on the NAS or from a backup file (e.g. on a USB stick or your computer). What exactly comes back depends on **which backup you have**:
 
 | Backup | Where it comes from | What comes back |
 |---|---|---|
 | **full** (a `….json.enc` file, "full" in the backup list) | every backup made with a **backup password** set | everything: peers, settings, accounts, NAS and ntfy passwords, history, the **server key** and the **HTTPS certificate**. Nobody changes anything on their side |
 | **basic** (no password, or from an older panel version) | a backup without a password, or from before full backups existed | peers, tiers, rules, settings. **It has no server key** — the installer asks for one |
 
-You need: the **backup password** from your password manager and the details of the `wg-backup` account on the NAS. With a basic backup, also the **server key** from your password manager — without it the restore still works, but everyone gets a new file (Step C5).
+You need: the **backup password** from your password manager and — for a backup on the NAS — the details of the `wg-backup` account on the NAS. With a basic backup, also the **server key** from your password manager — without it the restore still works, but everyone gets a new file (Step C5).
 
 > **The server key** is your VPN's identity — it is written into every person's file. With a different server key the existing files won't work: the phone "knocks" and the Pi doesn't answer.
 
@@ -580,9 +584,9 @@ You need: the **backup password** from your password manager and the details of 
 
 **Where: Computer, Pi**
 
-1. Do **Step B1** (Raspberry Pi OS Lite). Give the Pi **the same hostname** as before — then the HTTPS certificate from the backup matches and phones don't need a new `ca.crt`.
-2. On the router the Pi must get **the same address** as before (DHCP reservation) — the WireGuard port forward points at it.
-3. Firewall: **Step B4**.
+1. Do **Step B1** (Raspberry Pi OS Lite). Give the Pi **the same hostname** as before — then the HTTPS certificate from the backup matches and phones don't need a new `ca.crt`. If the name differs, the installer says so before restoring and offers to set the old one.
+2. On the router the Pi must get **the same address** as before (DHCP reservation) — the WireGuard port forward points at it. The installer reports a different address before restoring, too.
+3. Firewall: **Step B4** (the panel also opens the WireGuard port by itself).
 
 You don't need to install WireGuard or iptables — the installer adds them.
 
@@ -594,21 +598,32 @@ You don't need to install WireGuard or iptables — the installer adds them.
 sudo apt install -y git
 git clone https://github.com/mt3ch02/wg-panel.git ~/wg-panel
 cd ~/wg-panel
-sudo LAN_ACCESS=192.168.1.0/24 ./install.sh --restore
+sudo ./install.sh --restore
 ```
 
-Use the same `LAN_ACCESS` as in the previous install (or leave it out if the panel was reachable only through the VPN).
+The installer takes the install options (LAN access, panel port, HTTPS, language) from the full backup — you don't have to remember them. An option given explicitly wins over the backup, e.g. `sudo LAN_ACCESS=192.168.1.0/24 ./install.sh --restore`.
 
-The installer asks, in order:
+**A backup file instead of the NAS** — when the NAS is unavailable or you have a backup on your computer (the **This computer** button in Backups). Copy the file to the Pi and give it to the installer; if a `.sha256` file lies next to it, the installer checks the checksum:
+
+```bash
+scp wg-panel-20261019-033000.json.enc pi@<pi-address>:~
+sudo ./install.sh --restore ~/wg-panel-20261019-033000.json.enc
+```
+
+Then the installer only asks for the backup password.
+
+For a backup on the NAS the installer asks, in order:
 
 | Question | Enter |
 |---|---|
 | NAS address | e.g. `192.168.1.11` |
 | Share | `backup` (Enter) |
-| Directory on the share | the directory with the backups (Enter = `wg-panel`) |
+| Folder on share | the directory with the backups (Enter = `wg-panel`) |
 | NAS user / password | `wg-backup` / the password from your password manager (not shown) |
 | Which one to restore | Enter = the newest (it shows the list) |
 | Backup password | from your password manager |
+
+First the installer shows what is in the backup (date, number of people, server key, server name and address, install options). If this Pi has a **different name** than in the backup, it warns about `ca.crt` and asks whether to set the old name (Enter = yes). If it has a **different address** in the home network, it says what to do: a DHCP reservation for the old address, or a fix in Settings after the restore.
 
 You should see: "a full backup, N people. The server key and certificate are in place", then the usual installation, "Tunnel is up" and at the end "Restored from a full backup: sign in with your existing account".
 
@@ -616,11 +631,12 @@ When something doesn't match, the installer says what to fix. These NAS messages
 
 | Message (Polish) | Meaning and what to do |
 |---|---|
-| `NAS odrzucił login albo hasło` | the NAS rejected the login or password: a typo in the password or the account name; in the NAS settings check that the account isn't disabled and that the Pi's address isn't on a block list (e.g. automatic IP blocking) |
+| `NAS: odrzucony login albo hasło` | the NAS rejected the login or password: a typo in the password or the account name; in the NAS settings check that the account isn't disabled and that the Pi's address isn't on a block list (e.g. automatic IP blocking) |
 | `na udziale backup nie ma katalogu … - są tam: …` | the directory doesn't exist on the share: run it again and enter one of the listed directories |
-| `na NAS nie ma udziału …` | wrong share name — it must match the shared folder on the NAS |
-| `NAS nie odpowiada pod adresem …` | wrong address, or SMB is turned off on the NAS |
+| `NAS: nie ma udziału …` | wrong share name — it must match the shared folder on the NAS |
+| `NAS: brak odpowiedzi pod adresem …` | wrong address, or SMB is turned off on the NAS |
 | `couldn't open the backup` | wrong backup password |
+| `the backup checksum doesn't match` | damaged file (e.g. an unfinished copy) — use another backup |
 
 > **A backup without the server key** (basic, or from an older version): the installer says so and asks: **1) paste the old key** (from your password manager — everyone keeps connecting with their old files) or **2) generate a new one** (peers and settings come back, but everyone needs a new file — Step C5).
 
@@ -665,9 +681,9 @@ If you generated a new server key in Step C2:
 **Where: Phone, then Browser → Alerts**
 
 1. Install the **ntfy** app on your phone (no account needed).
-2. Make up a long random topic name, e.g. `wg-home-k7f2q9x4m1` — at least 12 characters, with digits.
+2. Make up a long random topic name, e.g. `wg-home-r4t8v2x6n3` — at least 12 characters, with digits.
 3. In the app: **+** → enter that name → **Subscribe**.
-4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/wg-home-k7f2q9x4m1`, **Save**.
+4. In the panel, **Alerts** tab → Notification settings: channel `ntfy`, address `https://ntfy.sh/wg-home-r4t8v2x6n3`, **Save**.
 5. Click **Send test alert**.
 
 You should see on your phone: "wg-panel: test powiadomień" (the notification text is currently in Polish).
@@ -746,7 +762,7 @@ The **Backups** page has three parts: at the top the **status** (what kind of ba
 | Backup password | **at least 12 characters, random — save it in your password manager** |
 | NAS: Address | e.g. `192.168.1.11` |
 | Share | `backup` |
-| Directory on the share | `wg-panel` |
+| Folder on share | `wg-panel` |
 | Username / Password | `wg-backup` / the password from Step 19 |
 | Pi: Backup folder | leave empty (default) |
 | Keep the last | `14` |
@@ -772,7 +788,7 @@ If the backup fails, a red bar shows the reason:
 | missing NAS user or password | fill in **Username** and **Password** in Backup settings, **Save settings** |
 | missing smbclient | install the panel again (Step 5) or `sudo apt install -y smbclient` |
 | the NAS rejected the login or password (`NT_STATUS_LOGON_FAILURE`) | wrong password or user name `wg-backup`; in the NAS settings check that the account isn't disabled and the Pi's address isn't blocked |
-| the directory … doesn't exist on the share — there are: … | enter one of the listed directories in **Directory on the share**, or create the directory on the NAS |
+| the directory … doesn't exist on the share — there are: … | enter one of the listed directories in **Folder on share**, or create the directory on the NAS |
 | `NT_STATUS_BAD_NETWORK_NAME` | wrong share name — must be exactly the shared folder's name (`backup`) |
 | `NT_STATUS_OBJECT_NAME_NOT_FOUND` or `…PATH_NOT_FOUND` | the share has no `wg-panel` directory — create it |
 | `NT_STATUS_ACCESS_DENIED` | `wg-backup` lacks write permission on `backup` — fix the folder permissions on the NAS |
@@ -1051,14 +1067,28 @@ wgctl restore --nas
 
 You should see: backups `OK` and a list of backups on the NAS (the same list you'll use after a card failure).
 
+4. A restore check — it tests what a checksum can't: whether the **backup password in your password manager** opens the backup. It installs and changes nothing, so it runs on the same Pi:
+
+```bash
+cd ~/wg-panel
+sudo ./install.sh --restore --check                 # the newest backup on the NAS
+sudo ./install.sh --restore ~/backup.json.enc --check # or a file
+```
+
+You should see the backup's description ("full", the number of people, server key: yes), "The backup opens with this password and has everything to restore the server" and "Nothing was changed". Worth doing every few months and after every change of the backup password.
+
 ### Full test (about an hour, on a spare SD card)
 
 It checks what really matters: whether you can rebuild the Pi from scratch from the backup on your NAS. You do it on a **spare card** — your current card stays untouched.
 
-1. Turn the Pi off, put in a spare card with clean Raspberry Pi OS (or use a second Pi) and go through path C: steps **C1–C2** (`install.sh --restore`). Along the way you check that the backup password in your password manager is current.
-2. **Right after the restore, before doing anything else:**
-   - Alerts → channel **off** — otherwise the test Pi would send notifications to your ntfy topic.
-   - Backups → Backup settings → untick **Back up automatically, every day** and **Save settings** — the full backup also restored the NAS password, so the test Pi would write backups to the same folder and might delete older ones during rotation.
+1. Put a spare card with clean Raspberry Pi OS into a second Pi (or turn the Pi off and swap cards) and go through path C, step **C1**, then step **C2** with `--test`:
+
+```bash
+sudo ./install.sh --restore --test
+```
+
+   Along the way you check that the backup password in your password manager is current.
+2. `--test` makes the copy a **test server**: automatic backups and notifications are off (the full backup also restored the NAS password and the ntfy topic — without this, the test Pi would write backups to the same folder, delete older ones during rotation and send you alerts), people's files, QR codes and links are not issued, and every page shows a red **Test server** bar. You don't have to switch anything off by hand. `wgctl test status` shows the mode.
 3. Check that everything came back:
 
 ```bash
@@ -1068,8 +1098,8 @@ wgctl diff
 
 You should see: the same people, tiers and names as on the real Pi (compare with `wgctl list` there), and `wgctl diff` showing the generated configuration with no errors.
 
-4. You can check from your phone that the VPN works with your old file (Step C3) — the best proof that the backup is full. Don't hand out files from the test Pi — it has the same keys as the real one.
-5. Shut the test Pi down and put the right card back. Wipe the spare card or keep it as a ready system copy (then store it safely — it holds the server key).
+4. With the real Pi off (or the router's port forward pointed at the test Pi), you can check from your phone that the VPN works with your old file (Step C3) — the best proof that the backup is full.
+5. Shut the test Pi down and put the right card back. Wipe the spare card or keep it as a ready system copy (then store it safely — it holds the server key). If the test Pi is to **replace** the real one, click **This is now the real server** on the red bar (or `wgctl test off`) — backups and notifications start working again.
 
 > ⚠ If anything in the full test fails — the backup won't restore, the installer says "a backup WITHOUT the server key", the list of people doesn't match — fix it **now** (usually: set a backup password and make a new backup). After a real card failure it will be too late.
 
@@ -1199,7 +1229,7 @@ Turn the tunnel on, wait 10 s, **Ctrl+C**. No lines = a router problem (the Wire
 
    Something differs → delete the tunnel from the app and import a new one from the person's page. If the server key changed (a backup without the key), everyone needs a new file — Step C5.
 
-3. **Firewall.** Briefly `sudo ufw disable`, test, then make sure to `sudo ufw enable`. If it works without ufw — the `51820/udp ALLOW` rule is missing (Step B4).
+3. **Firewall.** Briefly `sudo ufw disable`, test, then make sure to `sudo ufw enable`. If it works without ufw — the rule for the WireGuard port is missing (Step B4); the panel adds it by itself on **Apply changes**, so click it once and check `sudo ufw status`.
 
 ## Configuration changed outside the panel
 
@@ -1217,7 +1247,7 @@ If it wasn't you:
 
 ## The SD card died or a new Pi
 
-This is **path C** at the start of this guide: a clean card and `sudo ./install.sh --restore` — the installer restores everything from a full backup on the NAS, including the server key. Everyone connects unchanged.
+This is **path C** at the start of this guide: a clean card and `sudo ./install.sh --restore` (or `--restore FILE`) — the installer restores everything from a full backup, including the server key. Everyone connects unchanged.
 
 ## Uninstalling
 
@@ -1228,12 +1258,13 @@ This is **path C** at the start of this guide: a clean card and `sudo ./install.
 | `sudo /opt/wg-panel/uninstall.sh` | the program, the services (the watchdog too), `wgctl`, the panel's ufw rules, the panel's certificate authority | keeps working with the last configuration; **panel data stays** — a reinstall brings the panel back |
 | `sudo /opt/wg-panel/uninstall.sh --purge` | as above + database, backups on the card, certificates, file copies in `/etc/wireguard`, the `wg-panel` account, the saved install options (`/etc/wg-panel`) | keeps working; from now on you edit `wg0.conf` by hand |
 | `sudo /opt/wg-panel/uninstall.sh --restore` | as `--purge` + brings back `wg0.conf` from Step 2 (`/root/wg-panel-before`) | after `sudo reboot` the pre-panel configuration runs |
+| `sudo /opt/wg-panel/uninstall.sh --wireguard` | as `--purge` + all of WireGuard: tunnels stopped and disabled, everything in `/etc/wireguard` (**including the server key**), the `wireguard` packages, the panel's packet forwarding and the ufw rule for the WireGuard port | **stops**; remove the port forward on the router |
 
-The same from the unpacked repository: `sudo ./install.sh --uninstall` (with `--purge` or `--restore`).
+Without an option the script asks: 1) the panel only, 2) the panel and its data, 3) back to the pre-panel configuration (shown only when the Step 2 snapshot exists), 4) the panel and all of WireGuard. The same from the repository directory: `sudo ./install.sh --uninstall` (with an option or without).
 
-The script first lists what it will remove and what stays, and waits until you type `yes`. It refuses when a change in the panel is waiting for confirmation — confirm or roll it back first. `--restore` refuses when the Step 2 snapshot doesn't exist.
+The script first lists what it will remove and what stays, and waits until you type `yes`. Level 4 deletes the server key — there you type `remove wireguard`, even with `--yes`. It refuses when a change in the panel is waiting for confirmation — confirm or roll it back first. `--restore` refuses when the Step 2 snapshot doesn't exist.
 
-> **What the script never touches:** the server key, the `wg-quick@wg0` service, the backups on the NAS, or `/root/wg-panel-before`. `--restore` puts the panel's current configuration into `/root/wg-panel-after` in case you want to go back.
+> **What the script never touches** (except `--wireguard`, which is meant to): the server key, the `wg-quick@wg0` service, the ufw rule for the WireGuard port. **Never at all:** the backups on the NAS or `/root/wg-panel-before` (or `/root/przed-wg-panel` from older versions). `--restore` puts the panel's current configuration into `/root/wg-panel-after` in case you want to go back.
 
 > **Why the VPN keeps running after a plain uninstall:** the `wg0.conf` generated by the panel loads the rules from `/etc/wireguard/wg0-panel-rules.v4` at startup by itself, and packet forwarding is enabled by a file in `/etc/sysctl.d`. The script leaves those files — without them the tunnel wouldn't come up after a Pi reboot or wouldn't reach the home network.
 
@@ -1293,7 +1324,11 @@ The password manager should live **outside the Pi and outside the NAS** (a separ
 | undo the last apply | `wgctl rollback` |
 | list backups / restore | `wgctl restore` / `wgctl restore 12` |
 | backups on the NAS (new system) | `wgctl restore --nas` |
-| the whole Pi from a full backup (clean card) | `sudo ./install.sh --restore` |
+| the whole Pi from a full backup (clean card) | `sudo ./install.sh --restore [FILE]` |
+| check the password and the backup without restoring | `sudo ./install.sh --restore --check [FILE]` |
+| restore onto a second machine as a test server | `sudo ./install.sh --restore --test [FILE]` |
+| test server: mode / make it the real server | `wgctl test status` / `wgctl test off` |
+| installed version | `wgctl --version` (also at the bottom of every page) |
 | backup now / verify backups | `wgctl backup` / `wgctl backup --verify` |
 | device catalog | `wgctl host list`, `wgctl host add printer 192.168.1.70` |
 | traffic | `wgctl traffic Marek` |
@@ -1303,6 +1338,7 @@ The password manager should live **outside the Pi and outside the NAS** (a separ
 | HTTPS certificate: fingerprint, validity / renew | `wgctl tls` / `wgctl tls --renew` |
 | installer in Polish | `sudo INSTALL_LANG=pl ./install.sh` |
 | uninstall (VPN stays) | `sudo /opt/wg-panel/uninstall.sh` |
+| remove the panel and WireGuard entirely | `sudo /opt/wg-panel/uninstall.sh --wireguard` |
 | back to the pre-panel configuration | `sudo /opt/wg-panel/uninstall.sh --restore` |
 | turn off the authenticator code | `wgctl totp off admin` |
 | logs | `journalctl -u wg-panel -f` |
@@ -1341,7 +1377,7 @@ Before the new version starts, the installer saves a copy of the database. In **
 
 A new version sometimes writes `wg0.conf` slightly differently. Then the peer list shows the card "The panel has changes that are not on the interface" — click **Apply changes** and confirm.
 
-To change an option (e.g. the port), pass it when updating: `sudo BIND_PORT=8443 ./install.sh`. An empty value turns it off: `sudo LAN_ACCESS= ./install.sh` — the panel will then be reachable only through the VPN.
+To change an option (e.g. the port), pass it when updating: `sudo BIND_PORT=8443 ./install.sh`. `off` turns LAN access off: `sudo LAN_ACCESS=off ./install.sh` — the panel will then be reachable only through the VPN.
 
 The `~/wg-panel` directory (the cloned repository) isn't needed for the panel to run — the installer copied everything from it into `/opt/wg-panel`. Keep it for the next update (`git pull`) or delete it.
 

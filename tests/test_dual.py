@@ -57,7 +57,7 @@ class Sink(http.server.BaseHTTPRequestHandler):
 
 sink = http.server.HTTPServer(("127.0.0.1", 0), Sink)
 threading.Thread(target=sink.serve_forever, daemon=True).start()
-NTFY = f"http://127.0.0.1:{sink.server_port}/wg-test-k7f2q9x4m1"
+NTFY = f"http://127.0.0.1:{sink.server_port}/wg-test-r4t8v2x6n3"
 
 from panel import db, dual, helperclient, notify, scheduler  # noqa: E402
 

@@ -67,11 +67,15 @@ Copy the project to the Pi and run the installer:
 ```bash
 git clone https://github.com/mt3ch02/wg-panel.git
 cd wg-panel
-sudo LAN_ACCESS=192.168.1.0/24 ./install.sh
+sudo ./install.sh
 ```
 
-`LAN_ACCESS` makes the panel reachable from your home network. Use your own network's address.
-Without it, the panel listens only on the VPN address `10.0.0.1` and on the Pi itself
+The panel is reachable from your home network out of the box (`LAN_ACCESS=auto` is the default): the
+installer takes the network the server is in and opens the panel port to it only. You can also give one,
+e.g. `LAN_ACCESS=192.168.1.0/24`. A saved network that doesn't match the server any more
+(a backup restored on another computer, a new router) switches to the server's own network by itself.
+An update keeps your earlier choice: a panel set up for the VPN only stays that way until you run `sudo LAN_ACCESS=auto ./install.sh`.
+With `LAN_ACCESS=off` the panel listens only on the VPN address `10.0.0.1` and on the Pi itself
 (reach it with `ssh -L 8080:127.0.0.1:8080 pi@<pi-address>` and then `http://localhost:8080`).
 
 A step-by-step guide covering all three cases — taking over an existing WireGuard, a clean install and a
@@ -104,10 +108,14 @@ git pull
 sudo ./install.sh
 ```
 
+The installer prints the change (`Updating wg-panel: 1.3.2 -> 1.4.0`). The installed version is
+shown at the bottom of every page and by `wgctl --version`; what changed is in
+[CHANGELOG.md](CHANGELOG.md).
+
 An update replaces only the program. Everything you set up stays:
 
 - **Your data** (peers, tiers, rules, hosts, accounts, settings, history) lives in `/var/lib/wg-panel/panel.db`, separate from the code in `/opt/wg-panel`. New settings are added with their defaults; your values are never overwritten.
-- **Install options** (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) are remembered in `/etc/wg-panel/install.conf`. You don't repeat them. To change one, pass it again; an empty value (`LAN_ACCESS=`) turns LAN access off. Installs made before this file existed read the options from the installed service and the ufw rule.
+- **Install options** (`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`) are remembered in `/etc/wg-panel/install.conf`. You don't repeat them. To change one, pass it again; `LAN_ACCESS=off` (or an empty `LAN_ACCESS=`) turns LAN access off. Installs made before this file existed read the options from the installed service and the ufw rule.
 - **A snapshot of the database** is taken before the new code starts. It appears in **Backups** as "before update" and can be restored like any other backup.
 - **Built-in tiers and the `nas` host** are created only on the very first install. If you renamed or deleted them, an update doesn't bring them back.
 - **The server key, certificates and client files** are not touched. Nobody needs a new file.
@@ -139,16 +147,43 @@ them), so to issue a new file for someone you do a **key rotation**.
 
 ## Restoring onto a new Pi
 
-With a **full** backup on your NAS, a clean system becomes the old Pi with one command:
+With a **full** backup, a clean system becomes the old Pi with one command:
 
 ```bash
-sudo ./install.sh --restore
+sudo ./install.sh --restore                 # backup on your NAS
+sudo ./install.sh --restore ~/backup.json.enc   # or a backup file (USB stick, your computer)
 ```
 
-The installer asks for the NAS share and the backup password, lists the backups, checks the
-checksum, restores the server key, the certificate authority and the database, and brings the
-tunnel up. Everyone keeps connecting with their existing files, and devices keep trusting the
-panel's certificate.
+The installer asks for the NAS share (unless you give a file) and the backup password, checks the
+checksum, restores the server key, the certificate authority, the database and the install options
+(LAN access, port, HTTPS, language), and brings the tunnel up. Everyone keeps connecting with their
+existing files, and devices keep trusting the panel's certificate. Before it changes anything it
+warns when the new Pi has a different name or address than the old one.
+
+Check now and then that your backup password still opens the backup — nothing is changed:
+
+```bash
+sudo ./install.sh --restore --check
+```
+
+### Trying a restore on a second machine (test server)
+
+To see that a restore really works without touching the running server, restore onto a spare
+machine (another Pi, a virtual machine) in test mode:
+
+```bash
+sudo ./install.sh --restore --test              # or: --restore --test ~/backup.json.enc
+```
+
+It is a normal restore, but the copy behaves like a test server: automatic backups and
+notifications are off (so it doesn't overwrite the real backups on the NAS or send alerts),
+people's files, QR codes and one-time links are not issued (the copy has the same server key, so a
+device using a file from it would fight with the real server), every page shows a red **Test
+server** bar and the server name gets "(test)". A manual backup asks for confirmation first.
+
+When you're done, uninstall it, or — if this machine is to become the real server — click
+**This is now the real server** on the red bar (or run `wgctl test off`). `wgctl test status`
+shows the mode.
 
 From a basic backup (no server key), the installer asks whether to paste the old key or generate
 a new one. With a new key, everyone needs a new file.
@@ -159,7 +194,7 @@ Pass them as environment variables on the first install. Updates reuse the saved
 
 | Option | Default | Meaning |
 |---|---|---|
-| `LAN_ACCESS` | empty | Network allowed to open the panel besides the VPN, for example `192.168.1.0/24`. |
+| `LAN_ACCESS` | `auto` | Network allowed to open the panel besides the VPN: `auto` (the server's own network), e.g. `192.168.1.0/24`, or `off` (VPN and SSH tunnel only). |
 | `BIND_PORT` | `8080` | Panel port (HTTPS and HTTP on the same port; plain HTTP from the network is redirected). |
 | `TLS` | `1` | `0` turns HTTPS off. |
 | `INSTALL_LANG` | `en` | `pl` for Polish installer messages. |
@@ -220,6 +255,7 @@ wgctl rule add Anna --accept printer --proto tcp --port 631
 wgctl check Anna 192.168.1.10 445 -v           # simulate, exit code 0 = ACCEPT, 2 = DROP
 wgctl diff && wgctl apply                      # then: wgctl confirm
 wgctl backup --target smb                      # smb / local / both
+wgctl --version                                # installed version
 ```
 
 `wgctl --help` lists everything.
@@ -230,9 +266,11 @@ wgctl backup --target smb                      # smb / local / both
 sudo /opt/wg-panel/uninstall.sh            # removes the panel; the VPN keeps running, data stays
 sudo /opt/wg-panel/uninstall.sh --purge    # also removes data, the service account and saved options
 sudo /opt/wg-panel/uninstall.sh --restore  # --purge and back to the pre-panel configuration
+sudo /opt/wg-panel/uninstall.sh --wireguard  # --purge and all of WireGuard (tunnels, server key, packages)
 ```
 
-The server key, the `wg-quick@wg0` service and your backups on the NAS are never touched.
+Without an option the script asks which level you want. Only `--wireguard` touches the server key and the
+`wg-quick@wg0` service — it asks for a separate phrase (`remove wireguard`). Backups on the NAS are never touched.
 
 ## Languages and known limitations
 
@@ -259,7 +297,7 @@ helper/       the only component running as root
 wgctl         command-line interface
 systemd/      service units and the guard timer
 install.sh    install, update and --restore
-uninstall.sh  three levels of removal
+uninstall.sh  four levels of removal
 tests/        tests (not installed on the Pi)
 docs/         install guides and technical documentation (en, pl), screenshots
 ```

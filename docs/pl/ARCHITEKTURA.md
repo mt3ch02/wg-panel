@@ -71,7 +71,7 @@ Aktualizacja to `sudo ./install.sh` z nowej wersji. Instalator rozpoznaje ją po
 wygenerowanym przez panel i:
 
 1. czyta opcje z `/etc/wg-panel/install.conf` (root, 644). Opcja podana jawnie wygrywa, także
-   pusta (`LAN_ACCESS=` wyłącza dostęp z LAN). Instalacja sprzed tego pliku: adres, port i HTTPS
+   pusta. Przy **nowej** instalacji dostęp z LAN jest domyślnie `auto`; `LAN_ACCESS=off` (albo jawnie pusta `LAN_ACCESS=`) go wyłącza i zapisuje się jako `off`. Pusta wartość zapisana przez starsze wersje znaczy `off` — tak zapisywały „tylko przez VPN”, więc aktualizacja (ani odtworzenie takiej kopii) nie otworzy panelu na LAN sama. Instalacja sprzed pliku z usługą słuchającą tylko na VPN też dostaje `off`. Instalacja sprzed tego pliku: adres, port i HTTPS
    z pliku usługi `wg-panel.service`, a `WGPANEL_HOST=0.0.0.0` oznacza dostęp z LAN — sieć z reguły
    ufw z komentarzem `wg-panel LAN` albo z ustawienia `lan` w bazie, adres w VPN z `server_ip`;
 2. kopiuje kod do `/opt/wg-panel` (dane w `/var/lib/wg-panel` zostają);
@@ -80,6 +80,12 @@ wygenerowanym przez panel i:
 4. restartuje usługi; schemat bazy migruje się przy starcie, nowe ustawienia dochodzą przez
    `INSERT OR IGNORE`, więc wartości użytkownika nigdy nie są nadpisywane;
 5. po udanym starcie zapisuje opcje do `install.conf`.
+
+**Numer wersji** jest w pliku `VERSION` w katalogu głównym (kopiowany do `/opt/wg-panel/VERSION`).
+Czyta go `panel/version.py` (`get()`, przy braku pliku „?”): stopka każdej strony po zalogowaniu,
+`wgctl --version`, pole `version` w kopii (`restore --check` pokazuje „wersja panelu”). Instalator
+porównuje stary i nowy plik i wypisuje „Aktualizacja wg-panel: 1.3.2 -> 1.4.0” (dla instalacji
+sprzed 1.4.0: „starsza niż 1.4.0”). Zmiany opisuje `CHANGELOG.md`.
 
 Klucz serwera, urząd certyfikacji i pliki osób nie są ruszane. `tests/test_update.py` sprawdza
 wszystkie te kroki: dane po aktualizacji, migawkę, odczyt opcji (także ze starszej instalacji)
@@ -120,6 +126,17 @@ Z VPN panel otworzą **tylko tiery, które mają port panelu w polu „Porty na 
 (`host_access`; domyślnie ADMIN: `22,3389,8080`). Port panelu należy do portów zarządzanych
 łańcucha `WG-USERS-HOST`, więc pozostali dostają DROP mimo bycia w VPN. Starsza wersja miała
 osobny przełącznik przy osobie (`panel_access`); migracja przenosi go na port w tierze tej osoby.
+
+**Dostęp z LAN dopasowany do maszyny.** `LAN_ACCESS=auto` to sieć interfejsu, przez który serwer wychodzi do internetu (`firstrun.detect`). Instalator przy każdym uruchomieniu dopasowuje wartość do maszyny (`fit_lan_access` → `python3 -m panel.firstrun --fit-lan`): `auto` staje się tą siecią; zapamiętana sieć (albo z kopii), która nie styka się z żadną siecią serwera — odtworzenie na innym komputerze, nowy router — zamienia się na sieć serwera, z ostrzeżeniem; węższa sieć w sieci serwera (np. jeden komputer `/32`) i sieć podana jawnie w tym uruchomieniu zostają. Reguły ufw panelu (`# wg-panel LAN`) dla innej sieci albo innego portu panelu są usuwane.
+
+**Adres serwera idzie za maszyną.** `server_lan` to fakt o serwerze, nie wybór: panel sprawdza go przy starcie i co minutę (`app.address_check` → `firstrun.follow`). Gdy się zmieni (np. `.10` → `.99` na routerze), panel poprawia ustawienie i każdy host w katalogu ze starym adresem (zwykle `pi`), od razu odnawia certyfikat HTTPS (zamiast w ciągu 12 h) i zgłasza alert `address` z przypomnieniem o przekierowaniu portu na routerze; nowy adres spoza podsieci LAN dostaje osobne ostrzeżenie. W Ustawieniach pole jest tylko do odczytu, a formularz ustawień go nie zapisuje. Po `install.sh --restore` krok `restore_cli import` bierze też `wan_if` i — gdy adres serwera z niej wypada — `lan` z maszyny, nie z kopii.
+
+**Port WireGuarda w ufw.** Przy każdym zastosowaniu i cofnięciu (`ensure_base` → `ufw_wireguard`) helper
+trzyma jedną regułę ufw z komentarzem `wg-panel WireGuard` dla obecnego `listen_port`/udp: usuwa reguły
+panelu dla innych portów (od końca — numery się przesuwają) i dokłada brakującą; własnych reguł
+użytkownika nie rusza. Regułę dokłada też instalator, z portem z bazy, więc nowy albo odtworzony
+system przyjmuje połączenia jeszcze przed pierwszym zastosowaniem. `uninstall.sh` usuwa reguły ufw
+panelu poza tą jedną — VPN działa dalej bez panelu.
 
 ## Co idzie przez VPN u klienta
 
@@ -171,7 +188,7 @@ Po włączeniu IPv6 peerom trzeba wydać **nowe pliki konfiguracyjne** — stare
 
 ## Nazwy urządzeń
 
-`panel/names.py`: serwer („Pi”) i miejsce na kopie („NAS”) to ustawienia `name_server` i `name_storage`, a nie tekst wpisany w kod. Panel wczytuje je na początku każdego żądania; teksty stawiają nazwę w formie podstawowej, jak etykietę (`_("... {storage} ...", **names.kw())`), więc pasuje każda. Kopie → Zmień nazwę zapisuje samą nazwę (`POST /backups/name`). Nazwy są zwykłymi ustawieniami, więc pełna kopia je zabiera.
+`panel/names.py`: serwer („Pi”) i miejsce na kopie („NAS”) to ustawienia `name_server` i `name_storage`, a nie tekst wpisany w kod. Panel wczytuje je na początku każdego żądania; teksty stawiają nazwę w formie podstawowej, jak etykietę (`_("... {storage} ...", **names.kw())`), więc pasuje każda. Kopie → Zmień nazwę zapisuje samą nazwę (`POST /backups/name`). Nazwy są zwykłymi ustawieniami, więc pełna kopia je zabiera. Domyślna nazwa miejsca na kopie to „NAS”; komunikaty o udziale używają tylko nazwy i ogólnych podpowiedzi (bez menu konkretnego producenta). Wpisy dziennika zapisane przez starsze wersje w innym brzmieniu (inna nazwa, inne podpowiedzi) dopasowują wzorce przyjmujące dowolną nazwę i pokazują je w obecnym brzmieniu (`i18n.HELPER_PATTERNS`, `LOGGED_TEMPLATES`).
 
 ## Historia ruchu
 
@@ -531,11 +548,15 @@ Kopia to jeden JSON. Rodzaj zależy od **hasła kopii**:
 | hasła: NAS, ntfy, e-mail | — | ✓ |
 | historia: ruch, handshake'i, dziennik, alerty, lista kopii | — | ✓ |
 | klucz prywatny serwera, urząd certyfikacji HTTPS (z helpera) | — | ✓ |
+| opcje instalatora (`install.conf`) i nazwa serwera | — | ✓ |
 
 Z pełnej kopii odtworzysz całe Pi na czystej karcie jednym poleceniem:
 
 ```bash
-sudo ./install.sh --restore
+sudo ./install.sh --restore            # kopia na NAS-ie (pyta o udział, pokazuje listę)
+sudo ./install.sh --restore PLIK       # plik kopii (sprawdza .sha256 obok, jeśli jest)
+sudo ./install.sh --restore --check [PLIK]   # próba: otwiera i opisuje, niczego nie zmienia
+sudo ./install.sh --restore --test [PLIK]    # odtworzenie jako serwer testowy (druga maszyna)
 ```
 
 Instalator pyta o NAS i hasło kopii, pokazuje listę kopii, sprawdza sumę, zapisuje klucz
@@ -545,6 +566,34 @@ certyfikat na urządzeniach też (o ile nazwa i sieć Pi się nie zmieniły). Be
 bez interakcji: `SERVER_KEY=paste` (klucz na wejściu) albo `SERVER_KEY=new`. Kroki odtwarzania
 są w `panel/restore_cli.py` (`fetch` jako root przed instalacją, `import` i `apply` jako konto
 `wg-panel`); odpowiedzi można podać zmiennymi `WGPANEL_RESTORE_*`.
+
+**Opcje instalatora z kopii.** Pełna kopia niesie znane klucze z `/etc/wg-panel/install.conf`
+(`LAN_ACCESS`, `BIND_PORT`, `TLS`, `INSTALL_LANG`, `BIND_HOST`; `export.install_options`) i krótką
+nazwę serwera (`export.host_name`, tę samą, której używa urząd certyfikacji). `fetch` zapisuje opcje
+do `restore.json.options` (root, 600); `install.sh` je czyta, pomija podane jawnie w tym uruchomieniu
+(`EXPLICIT`), wylicza resztę od nowa (`derive_options`) i sprawdza (`validate_options`) — zła wartość
+przerywa instalację.
+
+**Nazwa i adres przed odtworzeniem.** `restore_cli.differences` porównuje kopię z tym systemem:
+nazwę (z kopii, a dla starszych kopii z `ca.json` urzędu certyfikacji — liczy się tylko wtedy, gdy
+kopia niesie urząd, bo helper używa starego urzędu tylko przy zgodnej nazwie i sieciach) oraz
+`server_lan` z adresami tego systemu (`ip -4 -o addr`). Inna nazwa: ostrzeżenie o `ca.crt` i pytanie,
+czy ustawić dawną (`hostnamectl` i wiersz `127.0.1.1` w `/etc/hosts`; `WGPANEL_RESTORE_HOSTNAME=t/n`).
+Inny adres: ostrzeżenie z tym, co zrobić — bez pytania, odtwarzanie idzie dalej.
+
+**Próba** (`restore_cli check`, `install.sh --restore --check`): to samo pobieranie, suma i odszyfrowanie
+co w `fetch`, potem opis kopii i różnic — nic nie jest zapisywane. Jedyny sposób, żeby wiedzieć, że hasło
+kopii z menedżera haseł dalej ją otwiera, zanim będzie potrzebne.
+
+**Serwer testowy** (`install.sh --restore --test`, `restore_cli import --test`): zwykłe odtworzenie,
+które dodatkowo ustawia `test_mode` na `1`. Gdy jest włączone, `export.due()` nigdy nie planuje
+kopii, `notify.send()` niczego nie wysyła (alerty dalej są zapisywane), ścieżki wydające plik
+osoby (`/peers/<id>/config`, `qr.svg`, linki doręczenia, `/d/<token>`) oraz `wgctl config` /
+`wgctl qr` odmawiają, `names.server()` dokleja „ (test)”, a `ui.page()` stawia na każdej stronie
+czerwony pasek z przyciskiem `POST /test/off`. Ręczna kopia pyta o potwierdzenie. `test_mode` to
+ustawienie stanu (`export.RUNTIME_SETTINGS`), więc kopia zrobiona na serwerze testowym nie niesie
+trybu, a odtworzenie zwykłej kopii nigdy go nie włącza. `wgctl test on|off|status`; obie zmiany
+trafiają do dziennika (`test.on` / `test.off`).
 
 Po odtworzeniu w panelu (Kopie → zaznacz kopię → Odtwórz zaznaczoną…) panel przywraca klucz z pełnej
 kopii i mówi wprost, czy dotychczasowe pliki osób zadziałają: kopia pamięta klucz publiczny serwera,
@@ -625,7 +674,7 @@ wg-panel/
 ├── systemd/          jednostki: helper, panel, strażnik (+ timer)
 ├── wgctl             CLI (te same operacje co panel)
 ├── install.sh        instalator (kopiuje program do /opt/wg-panel)
-├── uninstall.sh      odinstalowanie (trzy poziomy)
+├── uninstall.sh      odinstalowanie (cztery poziomy)
 ├── tests/            testy na atrapach wg/iptables/systemctl (nie trafiają na Pi)
 └── docs/             dokumentacja PL i EN, zrzuty ekranu
 ```

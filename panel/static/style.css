@@ -1012,6 +1012,8 @@ form.settings { margin-top: 4px; }
 .set-fields .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
 .set-fields .pair.trio { grid-template-columns: 4fr 3fr 3fr; }
 .set-fields .pair + .pair { margin-top: 14px; }
+/* pola w jednym rzedzie zawsze na jednej linii - nawet gdy dluzsza etykieta (np. po angielsku) sie zawija */
+.set-fields .pair > label { justify-content: space-between; }
 .set-actions { display: flex; justify-content: flex-end; padding-top: 16px;
                border-top: 1px solid var(--line-soft); }
 .set-actions button { margin: 0; }
@@ -1123,3 +1125,14 @@ td.nowrap, .peers-list td.c-hs, .peers-list td.c-transfer, .nowrap { white-space
 .chart-days .none { display: block; font-size: 12px; color: var(--muted); font-style: italic; }
 .chart-days .empty b { color: var(--muted); }
 .chart .nodata { fill: var(--line-soft); opacity: .35; }
+
+/* pole tylko do odczytu (np. adres serwera w LAN - panel wykrywa go sam) */
+input.readonly { opacity: .7; cursor: default; }
+
+/* numer wersji panelu na dole kazdej strony (po zalogowaniu) */
+.app-version { text-align: center; color: var(--muted, #888); font-size: 12px; padding: 18px 0 26px; }
+
+/* serwer testowy (install.sh --restore --test) - pasek na kazdej stronie */
+.test-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
+            background: #b3261e; color: #fff; padding: 10px 16px; font-size: 14px; }
+.test-bar button { background: #fff; color: #b3261e; border-color: #fff; margin: 0; }

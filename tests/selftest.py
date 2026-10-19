@@ -675,6 +675,48 @@ try:
           conn.execute("SELECT COUNT(*) c FROM peers").fetchone()["c"] == before_again)
     status, html, _ = request("/disk")
     check("przejety peer jest juz zgodny", "10.0.0.88" in html and "tylko na dysku" not in html)
+    print("\n11e. Numer wersji i serwer testowy")
+    version = open(os.path.join(ROOT, "VERSION"), encoding="utf8").read().strip()
+    status, html, _ = request("/")
+    check("stopka panelu z numerem wersji (po zalogowaniu)", f"wg-panel {version}</footer>" in html)
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "wgctl"), "--version"],
+                         capture_output=True, text=True, env=env, timeout=30)
+    check("wgctl --version", out.stdout.strip() == f"wgctl (wg-panel) {version}", out.stdout + out.stderr)
+
+    def wgctl(*args):
+        return subprocess.run([sys.executable, os.path.join(ROOT, "wgctl"), *args],
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    out = wgctl("test", "on")
+    check("wgctl test on", out.returncode == 0 and "serwer testowy" in out.stdout, out.stdout + out.stderr)
+    status, html, _ = request("/")
+    check("serwer testowy: pasek na każdej stronie i [TEST] w tytule",
+          'class="test-bar"' in html and "<title>[TEST] " in html and "To jest teraz właściwy serwer" in html)
+    check("serwer testowy: „(test)” przy nazwie serwera",
+          "(test)" in request("/backups")[1])
+    status, html_p, _ = request(f"/peers/{tomek}")
+    check("serwer testowy: strona osoby bez pliku, QR i linku",
+          "Pobierz .conf" not in html_p and "/qr.svg" not in html_p and "plik, kod QR i link" in html_p)
+    check("serwer testowy: .conf zablokowany", request(f"/peers/{tomek}/config")[0] == 403)
+    check("serwer testowy: QR zablokowany", request(f"/peers/{tomek}/qr.svg")[0] == 403)
+    check("serwer testowy: nowy link zablokowany",
+          request(f"/peers/{tomek}/delivery", {"csrf": csrf_from(html_p)})[0] == 403)
+    check("serwer testowy: stary link też nie otwiera pliku", request(f"/d/{delivery_token}")[0] == 403)
+    out = wgctl("config", "Tomek")
+    check("serwer testowy: wgctl config odmawia", out.returncode != 0 and "serwer testowy" in out.stderr,
+          out.stdout[-200:] + out.stderr)
+    status, html_b, _ = request("/backups")
+    check("serwer testowy: ręczna kopia pyta „na pewno?”", "Zrobić kopię na serwerze testowym?" in html_b)
+    stored = conn.execute("SELECT value FROM settings WHERE key = 'name_server'").fetchone()["value"]
+    check("serwer testowy: zapisana nazwa bez dopisku", "(test)" not in stored)
+    status, _, headers = request("/test/off", {"csrf": csrf_from(html_b)})
+    check("przycisk „To jest teraz właściwy serwer” wyłącza tryb testowy",
+          conn.execute("SELECT value FROM settings WHERE key = 'test_mode'").fetchone()["value"] == "0")
+    status, html, _ = request("/")
+    check("po wyjściu z testu - bez paska, plik znów dostępny",
+          'class="test-bar"' not in html and request(f"/peers/{tomek}/config")[0] == 200)
+    check("wgctl test status", wgctl("test", "status").stdout.strip() == "wlasciwy serwer")
+
     print("\n12. Konto: kod z aplikacji i zmiana hasla")
     COOKIE_SAVE = COOKIE["value"]
     COOKIE["value"] = ""

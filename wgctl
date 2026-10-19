@@ -37,6 +37,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from panel import version as panel_version  # noqa: E402
 from panel import (db, export, helperclient, model as panel_model, names, qr, schedule,  # noqa: E402
                    render, simulate, stats, traffic, watchdog, wgcrypto)
 
@@ -265,7 +266,27 @@ def cmd_show(args, conn) -> int:
     return 0
 
 
+def refuse_on_test(conn) -> None:
+    if names.is_test(db.settings(conn)):
+        fail("serwer testowy - plikow i kodow QR dla osob stad nie wydajemy (wgctl test off, "
+             "gdy ta maszyna ma byc wlasciwym serwerem)")
+
+
+def cmd_test(args, conn) -> int:
+    """Serwer testowy: install.sh --restore --test wlacza; tu sprawdzisz albo zmienisz."""
+    if args.action == "status":
+        print("serwer testowy" if names.is_test(db.settings(conn)) else "wlasciwy serwer")
+        return 0
+    on = args.action == "on"
+    db.set_setting(conn, "test_mode", "1" if on else "0")
+    db.log(conn, "wgctl", "test.on" if on else "test.off", "")
+    print("serwer testowy: kopie automatyczne i powiadomienia wylaczone, pliki osob nie sa wydawane"
+          if on else "wlasciwy serwer: kopie automatyczne i powiadomienia dzialaja, pliki osob mozna wydawac")
+    return 0
+
+
 def cmd_config(args, conn) -> int:
+    refuse_on_test(conn)
     peer = find_peer(conn, args.name)
     if not peer["privkey"]:
         fail("klucz prywatny zostal skasowany - zrob rotacje (wgctl rotate)")
@@ -276,6 +297,7 @@ def cmd_config(args, conn) -> int:
 
 
 def cmd_qr(args, conn) -> int:
+    refuse_on_test(conn)
     peer = find_peer(conn, args.name)
     if not peer["privkey"]:
         fail("klucz prywatny zostal skasowany - zrob rotacje (wgctl rotate)")
@@ -784,6 +806,7 @@ def cmd_export(args, conn) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wgctl", description="Zarzadzanie wg-panel z terminala")
+    parser.add_argument("--version", action="version", version=f"wgctl (wg-panel) {panel_version.get()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="stan tunelu i czy sa niezastosowane zmiany")
@@ -849,6 +872,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply_cmd.add_argument("--no-safe", action="store_true",
                            help="bez bezpiecznika z automatycznym cofnieciem")
     sub.add_parser("confirm", help="potwierdz ostatnia zmiane")
+
+    test = sub.add_parser("test", help="serwer testowy: status / on / off")
+    test.add_argument("action", choices=("status", "on", "off"))
     sub.add_parser("rollback", help="cofnij do poprzedniej konfiguracji")
     backup = sub.add_parser("backup", help="zrob kopie zgodnie z ustawieniami")
     backup.add_argument("--verify", action="store_true",

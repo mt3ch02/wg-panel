@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import re
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1263,6 +1264,196 @@ with conn_w:
     conn_w.execute("UPDATE tiers SET host_access = '22,3389,8080' WHERE name = 'ADMIN'")
 check("roznica po aktualizacji panelu jest widoczna", model.is_dirty(conn_w, None, stare))
 check("panel wie, ze odrzucenie tu nie pomoze", not model.discard_helps(conn_w, stare))
+
+print("\nPort WireGuarda w ufw (helper)")
+ufw_dir = tempfile.mkdtemp(prefix="wgpanel-ufw-")
+ufw_calls, ufw_rules = os.path.join(ufw_dir, "calls"), os.path.join(ufw_dir, "rules")
+with open(os.path.join(ufw_dir, "ufw"), "w", encoding="utf8") as handle:
+    handle.write(f'#!/bin/sh\nif [ "$1" = status ]; then cat {ufw_rules}; else echo "$*" >> {ufw_calls}; fi\n')
+os.chmod(os.path.join(ufw_dir, "ufw"), 0o755)
+
+
+def ufw_case(rules: str, port: str = "41194") -> tuple:
+    open(ufw_rules, "w", encoding="utf8").write(rules)
+    if os.path.exists(ufw_calls):
+        os.remove(ufw_calls)
+    # wczesniejsze testy podmienily w helperze run i shutil.which - tu prawdziwe wywolanie atrapy ufw
+    saved_run, saved_which = H.run, H.shutil.which
+    H.run = lambda args, **kw: subprocess.run([os.path.join(ufw_dir, args[0])] + args[1:],
+                                              capture_output=True, text=True)
+    H.shutil.which = lambda name: os.path.join(ufw_dir, name) if name == "ufw" else saved_which(name)
+    try:
+        steps = H.ufw_wireguard(port)
+    finally:
+        H.run, H.shutil.which = saved_run, saved_which
+    calls = open(ufw_calls, encoding="utf8").read() if os.path.exists(ufw_calls) else ""
+    return steps, calls
+
+
+steps, calls = ufw_case("Status: active\n[ 1] 22/tcp  ALLOW IN  Anywhere  # ssh\n")
+check("ufw: brak reguly - panel otwiera port WireGuarda z komentarzem",
+      calls == "allow 41194/udp comment wg-panel WireGuard\n" and any("otwarto" in s for s in steps), calls)
+steps, calls = ufw_case("Status: active\n"
+                        "[ 1] 51820/udp  ALLOW IN  Anywhere  # wg-panel WireGuard\n"
+                        "[ 2] 22/tcp     ALLOW IN  Anywhere  # ssh\n"
+                        "[ 3] 51820/udp (v6)  ALLOW IN  Anywhere (v6)  # wg-panel WireGuard\n")
+check("ufw: zmiana portu - stare reguly panelu usuniete od konca, nowy port otwarty, cudza zostaje",
+      calls == "--force delete 3\n--force delete 1\nallow 41194/udp comment wg-panel WireGuard\n", calls)
+steps, calls = ufw_case("Status: active\n[ 4] 41194/udp  ALLOW IN  Anywhere  # wg-panel WireGuard\n"
+                        "[ 5] 41194/udp (v6)  ALLOW IN  Anywhere (v6)  # wg-panel WireGuard\n")
+check("ufw: port juz otwarty - nic do zrobienia", calls == "" and steps == [], calls)
+steps, calls = ufw_case("Status: active\n[ 1] 41194/udp  ALLOW IN  Anywhere\n")
+check("ufw: wlasna regula uzytkownika na tym porcie nietknieta, panel dokłada swoja",
+      calls == "allow 41194/udp comment wg-panel WireGuard\n", calls)
+saved_which = H.shutil.which
+H.shutil.which = lambda name: None
+check("bez ufw - nic nie robi", H.ufw_wireguard("41194") == [])
+H.shutil.which = saved_which
+check("helper pilnuje portu przy kazdym zastosowaniu i cofnieciu (ensure_base)",
+      "ufw_wireguard(cfg[\"listen_port\"])" in open(os.path.join(ROOT, "helper", "wg_panel_helper.py")).read())
+install_src = open(os.path.join(ROOT, "install.sh"), encoding="utf8").read()
+check("instalator otwiera port WireGuarda z ustawien panelu",
+      "ufw allow \"$WG_PORT/udp\" comment 'wg-panel WireGuard'" in install_src)
+
+print("\nNazwa urzadzenia na kopie: z ustawien, domyslnie NAS")
+from panel import i18n, names  # noqa: E402
+check("domyslna nazwa to NAS", names.DEFAULTS["name_storage"] == "NAS")
+old_entries = [
+    "Synology odrzuciło login albo hasło (użytkownik kopie) - sprawdź je; w DSM sprawdź też, czy konto "
+    "nie jest wyłączone albo adres Pi zablokowany (Zabezpieczenia - Ochrona)",
+    "Synology: odrzucony login albo hasło (użytkownik kopie) - sprawdź je; w DSM sprawdź też, czy konto "
+    "nie jest wyłączone albo adres serwera (Pi) zablokowany (Zabezpieczenia - Ochrona)",
+    "Synology nie odpowiada pod adresem 192.168.1.5 - sprawdź adres i czy w DSM jest włączone SMB",
+    "na Synology nie ma udziału kopie", "kopia SMB: brak adresu albo udzialu Synology",
+]
+i18n.set_lang("pl")
+shown = [i18n.helper(text) for text in old_entries]
+check("stare wpisy dziennika (z nazwa i podpowiedziami DSM) pokazuja sie w obecnym brzmieniu",
+      all(text.startswith(("Synology: ", "kopia SMB (Synology)")) for text in shown)
+      and not any("DSM" in text or "Ochrona" in text for text in shown), str(shown))
+i18n.set_lang("en")
+shown_en = [i18n.helper(text) for text in old_entries]
+check("...i po angielsku", all(not any(ch in text for ch in "ąęłóśżź") for text in shown_en)
+      and shown_en[0].startswith("Synology: user name or password rejected"), str(shown_en))
+check("stary szczegol kopii: 'znaleziona na <nazwa>'", i18n.logged("znaleziona na Synology") == "found on Synology")
+i18n.set_lang("pl")
+cfg_nas = {"name_storage": "Dysk", "smb_user": "kopie", "smb_share": "s", "smb_host": "h"}
+msg = export.explain_smb(cfg_nas, Exception("NT_STATUS_LOGON_FAILURE"))
+check("biezacy komunikat: nazwa z ustawien, ogolna podpowiedz",
+      msg.startswith("Dysk: odrzucony login") and "NAS" not in msg and "DSM" not in msg, msg)
+check("...i ma tlumaczenie", i18n.helper(msg) == msg)
+i18n.set_lang("en")
+check("...po angielsku", i18n.helper(msg).startswith("Dysk: user name or password rejected"), i18n.helper(msg))
+i18n.set_lang("pl")
+code_text = "".join(open(os.path.join(ROOT, rel), encoding="utf8").read()
+                    for rel in ("panel/export.py", "panel/i18n.py", "panel/ui.py", "panel/app.py"))
+check("w kodzie panelu nie ma nazw Synology ani DSM", "Synology" not in code_text and "DSM" not in code_text)
+
+print("\nAdres serwera idzie za maszyna (.10 -> .99)")
+from panel import firstrun  # noqa: E402
+conn_a, _ = fresh("adres.db")
+db.set_setting(conn_a, "server_lan", "192.168.50.10")
+db.set_setting(conn_a, "lan", "192.168.50.0/24")
+db.set_setting(conn_a, "wan_if", "eth0")
+with conn_a:
+    conn_a.execute("DELETE FROM hosts WHERE name IN ('pi', 'drukarka')")
+    conn_a.execute("INSERT INTO hosts(name, address, description) VALUES ('pi', '192.168.50.10', 'serwer')")
+    conn_a.execute("INSERT INTO hosts(name, address, description) VALUES ('drukarka', '192.168.50.70', '')")
+moved = {"server_lan": "192.168.50.99", "lan": "192.168.50.0/24", "wan_if": "wlan0"}
+changes = firstrun.follow(conn_a, moved)
+check("nowy adres: ustawienie zmienione", changes == [("server_lan", "192.168.50.10", "192.168.50.99")]
+      and db.settings(conn_a)["server_lan"] == "192.168.50.99", str(changes))
+hosts_now = dict(conn_a.execute("SELECT name, address FROM hosts WHERE name IN ('pi', 'drukarka')").fetchall())
+check("host z adresem serwera (pi) przeniesiony, inne hosty nietknięte",
+      hosts_now == {"pi": "192.168.50.99", "drukarka": "192.168.50.70"}, str(hosts_now))
+check("w pracy interfejs i sieć się nie zmieniają (to robi tylko odtworzenie)",
+      db.settings(conn_a)["wan_if"] == "eth0")
+check("ten sam adres - nic do zrobienia", firstrun.follow(conn_a, moved) == [])
+check("adresu nie da się wykryć - niczego nie ruszamy", firstrun.follow(conn_a, {}) == []
+      and db.settings(conn_a)["server_lan"] == "192.168.50.99")
+vm = {"server_lan": "10.0.2.15", "lan": "10.0.2.0/24", "wan_if": "enp0s3"}
+changes = dict((k, (o, n)) for k, o, n in firstrun.follow(conn_a, vm, restored=True))
+check("po odtworzeniu na innej maszynie: adres, interfejs i sieć z maszyny",
+      changes == {"server_lan": ("192.168.50.99", "10.0.2.15"), "wan_if": ("eth0", "enp0s3"),
+                  "lan": ("192.168.50.0/24", "10.0.2.0/24")}, str(changes))
+db.set_setting(conn_a, "lan", "10.0.0.0/8")
+changes = firstrun.follow(conn_a, {"server_lan": "10.0.2.16", "lan": "10.0.2.0/24"}, restored=True)
+check("po odtworzeniu: sieć domowa, w której adres się mieści (np. szersza), zostaje",
+      [c[0] for c in changes] == ["server_lan"] and db.settings(conn_a)["lan"] == "10.0.0.0/8", str(changes))
+
+from panel import app as panel_app  # noqa: E402
+refreshed = []
+panel_app.CONN = conn_a
+saved_tls = panel_app.tls_refresh
+panel_app.tls_refresh = lambda *a, **k: refreshed.append(1)
+db.set_setting(conn_a, "lan", "192.168.50.0/24")
+db.set_setting(conn_a, "server_lan", "192.168.50.10")
+os.environ["WGPANEL_DETECT"] = json.dumps({"server_lan": "192.168.50.99", "lan": "192.168.50.0/24", "wan_if": "eth0"})
+try:
+    panel_app.address_check()
+    alert = conn_a.execute("SELECT kind, message FROM alerts WHERE kind = 'address' ORDER BY id DESC").fetchone()
+    check("panel: zmiana adresu - alert z adresami i podpowiedzią o routerze",
+          alert is not None and "192.168.50.10 -> 192.168.50.99" in alert["message"]
+          and "przekierowuje port WireGuarda" in alert["message"], str(alert and dict(alert)))
+    check("panel: certyfikat HTTPS od razu z nowym adresem", refreshed == [1])
+    check("panel: wpis w dzienniku", conn_a.execute(
+        "SELECT COUNT(*) FROM audit WHERE action = 'address.change'").fetchone()[0] == 1)
+    os.environ["WGPANEL_DETECT"] = json.dumps({"server_lan": "172.16.5.5"})
+    panel_app.address_check()
+    out_alert = conn_a.execute("SELECT message FROM alerts WHERE subject = 'adres serwera poza siecia'").fetchone()
+    check("panel: nowy adres poza siecią domową - osobne ostrzeżenie",
+          out_alert is not None and "172.16.5.5" in out_alert[0] and "192.168.50.0/24" in out_alert[0])
+    refreshed.clear()
+    panel_app.address_check()
+    check("panel: bez zmiany adresu - nic (bez alertu, bez odnawiania)", refreshed == [])
+finally:
+    del os.environ["WGPANEL_DETECT"]
+    panel_app.tls_refresh = saved_tls
+from panel import i18n as i18n_mod  # noqa: E402
+i18n_mod.set_lang("en")
+check("alerty o adresie mają tłumaczenie", not i18n_mod.audit_detail(
+    i18n_mod.pl(i18n_mod.ALERTS["address"], old="a", new="b")).startswith("Adres")
+    and i18n_mod.alert_kind("address") == "server address")
+i18n_mod.set_lang("pl")
+from panel import ui as ui_mod  # noqa: E402
+page = ui_mod.settings_page({"username": "a", "csrf": "x"}, db.settings(conn_a), "KEY")
+check("Ustawienia: adres serwera w LAN tylko do odczytu (bez name - zapis go nie nadpisze)",
+      'name="server_lan"' not in page and "wykrywany z tego serwera" in page and 'name="lan"' in page)
+check("zapis ustawień pomija adres serwera", "- ui.READONLY_SETTINGS" in
+      open(os.path.join(ROOT, "panel", "app.py"), encoding="utf8").read())
+
+print("\nNumer wersji i serwer testowy (bez HTTP)")
+from panel import version as panel_version, notify as notify_mod  # noqa: E402
+version = open(os.path.join(ROOT, "VERSION"), encoding="utf8").read().strip()
+check("VERSION to numer wersji", bool(re.fullmatch(r"\d+\.\d+\.\d+", version)) and panel_version.get() == version)
+check("brak pliku VERSION - '?', bez błędu", panel_version.get(TMP) == "?")
+conn_t2, _ = fresh("testowy.db")
+db.set_setting(conn_t2, "backup_enabled", "1")
+db.set_setting(conn_t2, "backup_time", "03:30")
+at = time.mktime((2026, 10, 19, 3, 30, 0, 0, 0, -1))
+check("kopia dobowa: o swojej porze robi się", export.due(db.settings(conn_t2), 0, at))
+db.set_setting(conn_t2, "test_mode", "1")
+check("serwer testowy: kopia dobowa się nie robi", not export.due(db.settings(conn_t2), 0, at))
+sent = []
+saved_channel = notify_mod._send_channel
+notify_mod._send_channel = lambda *a, **k: sent.append(a) or True
+try:
+    cfg_t = dict(db.settings(conn_t2), alerts_channel="ntfy", alerts_url="https://ntfy.example/t")
+    check("serwer testowy: powiadomienie nie wychodzi", notify_mod.send(cfg_t, "s", "m") is False and not sent)
+    cfg_t["test_mode"] = "0"
+    check("właściwy serwer: powiadomienie wychodzi", notify_mod.send(cfg_t, "s", "m") is True and len(sent) == 1)
+finally:
+    notify_mod._send_channel = saved_channel
+data_t = export.build(conn_t2)
+check("kopia: numer wersji panelu, bez test_mode",
+      data_t.get("version") == version and "test_mode" not in {r["key"] for r in data_t["settings"]})
+from panel import names as names_mod, ui as ui_mod2  # noqa: E402
+names_mod.load(db.settings(conn_t2))
+check("serwer testowy: „(test)” tylko przy wyświetlaniu", names_mod.server().endswith(" (test)")
+      and "(test)" not in db.settings(conn_t2)["name_server"])
+check("strona logowania bez numeru wersji i bez paska", "app-version" not in ui_mod2.page("x", "y")
+      and "test-bar" not in ui_mod2.page("x", "y"))
+names_mod.load({})
 
 print("\n" + "=" * 60)
 if FAILURES:

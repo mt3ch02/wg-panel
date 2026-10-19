@@ -229,6 +229,7 @@ DEFAULT_SETTINGS = {
     "name_storage": names.DEFAULTS["name_storage"],
     # kopie zapasowe
     "backup_enabled": "0",
+    "test_mode": "0",                  # serwer testowy (install.sh --restore --test) - poza kopia
     "backup_target": "local",          # local | smb | both (export.TARGETS)
     "backup_dir": "/var/lib/wg-panel/backups",
     "backup_time": "03:30",
